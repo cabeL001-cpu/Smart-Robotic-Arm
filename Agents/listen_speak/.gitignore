@@ -1,0 +1,3 @@
+__pycache__/
+assets/tts/*.wav
+assets/tts/*.mp3
