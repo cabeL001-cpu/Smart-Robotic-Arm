@@ -11,3 +11,4 @@
 |- README.md        this file
 
 ```
+Check `Agents/AGENTS.md` if you are not human.
