@@ -22,6 +22,7 @@ def _synthesize_edge(text, wav_path):
     """用 edge-tts 合成，再用 ffmpeg 转成 WAV。"""
     import edge_tts
 
+    wav_path.parent.mkdir(parents=True, exist_ok=True)
     mp3_path = wav_path.with_suffix(".mp3")
     asyncio.run(edge_tts.Communicate(text, config.TTS_VOICE).save(str(mp3_path)))
     subprocess.run(
