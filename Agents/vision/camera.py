@@ -23,6 +23,9 @@ class Mount:
     arm_base_px: tuple = ()        # 基座轴在棋盘平面的投影
     arm_x_px: tuple = ()           # 沿机械臂零角方向的第二个平面点
 
+    robot_center_px: tuple = ()     # 车体中心的地面投影像素
+    robot_forward_px: tuple = ()    # 前方第二个地面点的像素
+
     @classmethod
     def load(cls, path=None):
         return cls(**json.loads(Path(path).read_text(encoding="utf-8"))) if path else cls()

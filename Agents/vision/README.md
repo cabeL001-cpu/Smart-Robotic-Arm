@@ -44,3 +44,31 @@ python3 -m vision.align --source 0 --config rig.json --arm-config arm-calibratio
 ~~~
 
 首次用实测基座姿态求逆解，待舵机响应后按实测偏差修正。棋盘与末端同时可见时才更新动作，连续两秒到位后返回，超时或达到修正次数会报出未到位。测试时先单独运行 `vision.arm` 核对尺度、方向和观测，再接通机械臂。[关节和串口标定](../arm/README.md)
+
+## 机器人场地位姿
+
+场地左下角为原点，右/上为 +X/+Y，朝 +X 为 0，逆时针为正。按场地图，棋盘左下在 (0.9, 0.9) m，棋盘上边朝场地上方。A、B、C、D 分别为 (0.5, 1.5)、(1.5, 1.5)、(1.5, 0.5)、(0.5, 0.5) m。棋盘须固定在场地中。[场地布局](../image-2.png)
+
+先将车心停在一个已知位置，量车头朝向。下面的数值示例表示车心在 (1, 1) m，车头指向 +X。程序用这一帧标定车心与车前方的地面投影像素。保持相机安装、分辨率与底盘离地姿态一致，之后用当前帧即可恢复车体位姿。`--config rig.json` 可沿用机械臂安装参数。
+
+~~~bash
+python3 -m unittest vision.test_robot
+python3 -m vision.robot --source 0 --config rig.json --calibrate 1 1 0 --save-mount vehicle.json
+python3 -m vision.robot --source 0 --config vehicle.json --cell 4
+~~~
+
+每行 JSON 的 `pose` 包含 `x_m`、`y_m`、`yaw_rad`、参照来源和重投影误差。`--cell` 让两个视觉模块使用同一次曝光和标签检测。相机视野随车移动，失去固定参照时该帧输出 `pose: null`。单相机无法从无标志地面直接恢复绝对位置。
+
+场地调整后可通过 `--field field.json` 指定棋盘摆放位置及可选地标。下例按毫米填写，墙标高度仅作文件格式示例，使用前实测各黑色方框中心距地面的高度。
+
+~~~json
+{
+  "board_origin_mm": [900, 900],
+  "board_yaw_deg": 0,
+  "floor_tags": [],
+  "wall_family": "36h11",
+  "wall_heights_mm": {"1": 180, "2": 180, "3": 180, "4": 180}
+}
+~~~
+
+默认使用棋盘。墙标只有在实际进入画面、配置镜头内参和实测中心高度时参与独立的三维位姿解算。按图使用 200 mm 正方形，码面朝场内、顶边向上，物理解还须与下视方向和相机高度一致。可选的水平地标记录格式为 `{"family":"36h11","id":20,"center_mm":[500,500],"side_mm":100,"yaw_deg":0}`，编码需区别于棋盘和墙标。
