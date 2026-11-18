@@ -14,6 +14,7 @@ python -m move stop --dry-run
 两条命令分别打印 `GO 250` 和 `STOP`。预览用来核对将要发送的指令。若本机已安装 Arduino CLI 和 `arduino:avr` 平台，还可以离线编译 Uno 固件。
 
 ```bash
+arduino-cli lib install Servo   # 共用 Uno 的机械臂固件依赖，安装一次即可
 arduino-cli compile --fqbn arduino:avr:uno move
 ```
 
@@ -22,7 +23,7 @@ arduino-cli compile --fqbn arduino:avr:uno move
 ## 拿到硬件后运行
 
 1. 将四个车轮架空，沿用调好参数时的 M1 至 M4 接线，接好底盘驱动电源。各电机座和引脚标注见[扩展板图](../image-8.png)。
-2. 在 Arduino IDE 打开 `move/move.ino`，同目录保留 `move_func.ino`。选择 **Arduino Uno** 和对应端口，将草图上传到 Uno，然后关闭串口监视器。
+2. 在 Arduino IDE 打开 `move/move.ino`，安装 Servo 库，同目录保留 `move_func.ino` 和 `arm_control.ino`。选择 **Arduino Uno** 和对应端口，将草图上传到 Uno，然后关闭串口监视器。
 3. 用 USB 数据线连接树莓派与 Uno 的板载串口。若沿用 USB 转 TTL 串口模块，使用电平与 Uno 兼容的模块，将模块 TX 接 Uno RX、模块 RX 接 Uno TX，并共地。板载 USB 串口和外接模块任选一条控制路径。
 4. 在树莓派上进入本项目的 `Agents` 目录。下列示例创建一个底盘专用 Python 环境，安装 pySerial，并列出串口。若已激活项目原有的 `~/mx` 环境，可直接运行最后两行。
 
@@ -98,3 +99,5 @@ MHS.move("stop", port=port)
 打开串口可能使 Uno 复位，树莓派会在握手期间重发 `STOP`，收到确认后只发送一次运动指令。Uno 使用本机时钟计时，通信中断后仍会在该次动作到期时停车。
 
 若提示「Uno 未确认停车」，核对设备名、两端波特率、固件和收发线。若已收到停车回执但某个轮子没有转动，用单轮命令检查对应电机座、底盘供电和实际接线。
+
+同一 Uno 同时提供关节控制。组合动作通过 `MHS.open_uno` 复用串口，打开时握手停车一次。[机械臂调用示例](../arm/README.md)

@@ -46,6 +46,10 @@ uint16_t parseDuration(const char *digits) {
 }
 
 void handleCommand(char *line) {
+  if (strncmp(line, "ARM ", 4) == 0) {
+    setArmPulses(line + 4);
+    return;
+  }
   if (strcmp(line, "STOP") == 0) {
     stop();
     motionDurationMs = 0;

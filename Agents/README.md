@@ -1,6 +1,6 @@
 # 银立方机器人系统集成
 
-当前可运行的链路为 **树莓派 Python → 串口 → Arduino Uno → 扩展板 M1 至 M4**。上层程序在 `Agents` 目录导入 `MHS`，按车体方向和毫秒数控制底盘。每次调用等待 Uno 确认停车。
+树莓派通过一块 Uno 驱动四轮和两台 MG995。在 `Agents` 目录导入 `MHS`。组合动作使用 `MHS.open_uno` 复用串口，底盘回执表示已停车，舵机回执表示关节指令已接受。
 
 ```python
 import MHS
@@ -11,7 +11,7 @@ MHS.move("go", 250, port="/dev/ttyACM0")
 | 模块 | 接口与集成状态 | 模块说明 |
 | --- | --- | --- |
 | move 底盘 | `MHS.move(action, duration_ms, port=...)`，提供树莓派命令行与 Uno 固件 | [接线、安装、点动和串口协议](move/README.md) |
-| arm 机械臂 | 规划接收 0 至 8 的目标格，本阶段仅记录接口边界 | [机械臂说明](arm/README.md) |
+| arm 机械臂 | `MHS.arm(cell)` 在对齐工位规划两关节并通过共用 Uno 执行 | [机械臂说明](arm/README.md) |
 | vision 视觉与定位 | 规划提供车体位姿和格心测量，本阶段仅记录所需观测 | [视觉与定位说明](vision/README.md) |
 | listen_speak 语音 | 已有独立的识别和播报接口，底盘可单独运行 | [语音接口与使用方法](listen_speak/README.md) |
 
