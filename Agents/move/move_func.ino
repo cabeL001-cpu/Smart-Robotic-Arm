@@ -161,7 +161,8 @@ void m4Forward() {
   analogWrite(11, 0);
 }
 
-void setup() {
+// 扩展板按 M1 至 M4 的次序配置，每个电机占用一个方向脚和一个 PWM 脚。
+void initMotorPins() {
   pinMode(2, OUTPUT);
   pinMode(3, OUTPUT);
   pinMode(4, OUTPUT);
@@ -170,7 +171,4 @@ void setup() {
   pinMode(6, OUTPUT);
   pinMode(12, OUTPUT);
   pinMode(11, OUTPUT);
-}
-
-void loop() {
 }
