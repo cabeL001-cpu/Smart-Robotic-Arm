@@ -45,3 +45,5 @@ with MHS.open_uno("/dev/ttyACM0") as link:
 ~~~
 
 `arm.kinematics.inverse` 和 `forward` 可用毫米坐标独立测试。`arm.set_joints` 也可直接接收规划出的关节角。串口格式为 `ARM 肩脉宽 肘脉宽` 加换行，只有合法的整对参数才更新输出。固件上电后等首个关节指令再输出脉冲。[几何与角度约束](../image-5.png) · [Arduino Servo 实现](https://github.com/arduino-libraries/Servo/blob/master/src/avr/Servo.cpp)
+
+车辆停在不同工位时，可用单相机在当前棋盘坐标中定位基座并闭环修正。[视觉对格操作](../vision/README.md)
