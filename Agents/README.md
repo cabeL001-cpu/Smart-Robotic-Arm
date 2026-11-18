@@ -13,6 +13,7 @@ MHS.move("go", 250, port="/dev/ttyACM0")
 | move 底盘 | `MHS.move(action, duration_ms, port=...)`，提供树莓派命令行与 Uno 固件 | [接线、安装、点动和串口协议](move/README.md) |
 | arm 机械臂 | `MHS.arm(cell)` 在对齐工位规划两关节并通过共用 Uno 执行 | [机械臂说明](arm/README.md) |
 | vision 视觉与定位 | 随车单相机同时测量格心误差和场地位姿。`python3 -m vision.robot --cell 4` 可共用同一帧 | [视觉与定位说明](vision/README.md) |
+| IMU 定位 | 独立读取 YbImu 串口、静止校准、二维推算与带时间戳的视觉校正 | [实时采样、回放和融合](move/imu/README.md) |
 | listen_speak 语音 | 已有独立的识别和播报接口，底盘可单独运行 | [语音接口与使用方法](listen_speak/README.md) |
 
 系统约定上层的 `("A", "arrive")` 表示前往停靠点，`("4", "arrive")` 表示将机械臂末端移到 4 号格。视觉提供米和弧度格式的车体位姿，路径规划可将停靠目标转换为底盘动作。当前的 `MHS.move("go", 250)` 只执行一次定时前进，回执可用于安排下一步动作。现有语音解析器的输出范围见其模块说明。
