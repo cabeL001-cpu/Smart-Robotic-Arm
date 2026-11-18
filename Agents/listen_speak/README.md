@@ -53,7 +53,8 @@ listen_speak/
 ├── tts.py             # 语音合成与播放
 ├── requirements.txt   # Python 依赖
 ├── README.md          # 本文件
-└── assets/tts/        # 播报缓存，运行时生成，不入库
+├── assets/tts/        # 播报缓存，运行时生成，不入库
+└── assets/piper/      # Piper 离线语音模型，需下载，不入库
 ```
 
 ## 四、工作流程
@@ -115,11 +116,12 @@ listen()
 |---|---|
 | 在线合成成功 | edge-tts 合成 → ffmpeg 转 WAV → 缓存 → `pw-play` 播放 |
 | 同一句话已缓存 | 直接播放缓存，不再联网 |
-| 离线或合成失败 | `espeak-ng -v cmn` 合成 → `pw-play` 播放 |
+| 离线或合成失败 | Piper `huayan-medium` 合成 → `pw-play` 播放；Piper 失败再退回 espeak-ng |
 
 - 缓存目录：`assets/tts/`，按文本内容哈希命名
 - 播放用 `pw-play`（实测可用）；没有时退回 `aplay -D plughw:CARD=Headphones,DEV=0`
 - `prewarm()` 可以在有网时预生成固定播报，之后断网也能播放自然语音
+- 离线兜底用 **Piper 神经网络合成**（`assets/piper/zh_CN-huayan-medium.onnx`，约 61MB），音质远好于 espeak-ng 的机械音；模型需按下方命令单独下载，不入库
 
 ## 六、配置说明（config.py）
 
@@ -136,6 +138,7 @@ listen()
 | `LISTEN_TIMEOUT` | `8.0` | 等待开口时间（秒） |
 | `TTS_VOICE` | `zh-CN-XiaoxiaoNeural` | edge-tts 音色 |
 | `ESPEAK_VOICE` | `cmn` | espeak-ng 中文音色 |
+| `PIPER_MODEL` | `assets/piper/zh_CN-huayan-medium.onnx` | Piper 离线音色模型路径 |
 | `PLAY_DEVICE` | `plughw:CARD=Headphones,DEV=0` | aplay 兜底设备 |
 
 ## 七、运行环境与依赖
@@ -144,10 +147,22 @@ listen()
 
 ```bash
 source ~/mx/bin/activate
-pip install -r requirements.txt        # 主要新增 edge-tts
+pip install -r requirements.txt        # 主要新增 edge-tts、piper-tts
 ```
 
 系统依赖（已安装）：`espeak-ng`、`ffmpeg`、`pipewire`（提供 `pw-play`）。
+
+离线语音模型（Piper，下载到 `assets/piper/`，不入库）：
+
+```bash
+mkdir -p ~/Smart-Robotic-Arm/Agents/listen_speak/assets/piper
+cd ~/Smart-Robotic-Arm/Agents/listen_speak/assets/piper
+# 国内镜像（hf-mirror）直连；huggingface.co 直连超时
+curl -L -o zh_CN-huayan-medium.onnx \
+  'https://hf-mirror.com/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx'
+curl -L -o zh_CN-huayan-medium.onnx.json \
+  'https://hf-mirror.com/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json'
+```
 
 ## 八、自测命令
 

@@ -30,6 +30,9 @@ MAX_RECORD_SECONDS = 12.0   # 单次录音上限（秒）
 TTS_VOICE = "zh-CN-XiaoxiaoNeural"
 TTS_CACHE_DIR = str(Path(__file__).parent / "assets" / "tts")
 ESPEAK_VOICE = "cmn"
+PIPER_MODEL = str(
+    Path(__file__).parent / "assets" / "piper" / "zh_CN-huayan-medium.onnx"
+)
 PLAY_DEVICE = "plughw:CARD=Headphones,DEV=0"  # pw-play 不可用时的 aplay 兜底
 
 # ---------------- 播报模板 ----------------

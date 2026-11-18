@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from . import config
@@ -40,6 +41,17 @@ def _synthesize_espeak(text, wav_path):
     )
 
 
+def _synthesize_piper(text, wav_path):
+    """离线神经网络合成，中文音色 huayan-medium，比 espeak 自然。"""
+    piper = str(Path(sys.executable).with_name("piper"))
+    subprocess.run(
+        [piper, "--model", config.PIPER_MODEL, "--output_file", str(wav_path)],
+        input=text + "\n",
+        text=True,
+        check=True,
+    )
+
+
 def _play(wav_path):
     """优先用 PipeWire 播放（实测可用），没有就退回 aplay 直连耳机孔。"""
     if shutil.which("pw-play"):
@@ -68,8 +80,11 @@ def speak(text, offline=False):
         except Exception:
             pass  # 在线合成失败，退回离线引擎
 
-    offline_path = wav_path.with_name(wav_path.stem + "-espeak.wav")
-    _synthesize_espeak(text, offline_path)
+    offline_path = wav_path.with_name(wav_path.stem + "-offline.wav")
+    try:
+        _synthesize_piper(text, offline_path)
+    except Exception:
+        _synthesize_espeak(text, offline_path)  # Piper 失败，退回机械音
     _play(offline_path)
     return True
 
