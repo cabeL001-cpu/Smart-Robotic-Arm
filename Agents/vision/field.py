@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .board import BOARD, Plane, fit_plane, square
+from .board import BOARD_LAYOUT, Plane, fit_plane, square
 
 
 DOCKS_M = {"A": (0.5, 1.5), "B": (1.5, 1.5), "C": (1.5, 0.5), "D": (0.5, 0.5)}
@@ -33,7 +33,7 @@ class Field:
     def floor_layout(self):
         a = math.radians(self.board_yaw_deg)
         rotation = np.array([[math.cos(a), math.sin(a)], [-math.sin(a), math.cos(a)]])
-        layout = {k: xy @ rotation + self.board_origin_mm for k, xy in BOARD.items()}
+        layout = {k: xy @ rotation + self.board_origin_mm for k, xy in BOARD_LAYOUT.items()}
         for tag in self.floor_tags:
             key = tag["family"], tag["id"]
             if key in layout or (key[0] == self.wall_family and key[1] in WALLS):
@@ -87,7 +87,7 @@ def locate_floor(tags, mount, field):
     if plane is not None:
         return plane, "floor"
     # 独有编码的附加平面地标可单独解算。棋盘小标签仍要求多个标签互证。
-    extra = {k: xy for k, xy in layout.items() if k not in BOARD}
+    extra = {k: xy for k, xy in layout.items() if k not in BOARD_LAYOUT}
     plane = fit_plane(tags, extra, min_tags=1)
     if plane is not None:
         return plane, "floor"

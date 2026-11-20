@@ -1,12 +1,12 @@
 # 银立方机器人 · 树莓派部署指南
 
-树莓派运行 Python，通过板载蓝牙与扩展板上的 HC-05 交换命令，树莓派侧绑定为 `/dev/rfcomm0`。经典 Arduino Uno 运行一份同时驱动四向 SR09 避障、四轮和两台 MG995 的固件。车上只有一台距地约 1.5 m 的下视摄像头，供机械臂与车体定位共用。YbImu 通过自己的 USB 串口把数据送到树莓派。
+树莓派运行 Python，通过板载蓝牙与扩展板上的 HC-05 交换命令，树莓派侧绑定为 `/dev/rfcomm0`。经典 Arduino Uno 运行一份同时驱动四向 SR09 避障、四轮和两台 MG995 的固件。顶部下视摄像头距地约 1.5 m，供机械臂与车体定位共用。车头正前方中部另装一台前视摄像头，读取围挡标签。YbImu 通过自己的 USB 串口把数据送到树莓派。
 
 首次装机按第 1–7 节进行。**只验收四轮**时，第 2 节只装 `move/requirements.txt` 并运行底盘预览，第 3 节配对蓝牙并确认 `UNO_PORT`，随后烧录第 4 节的完整草图，按第 5.1 节验证四个 SR09 后点动。只部署语音时，先完成第 2 节的代码复制和虚拟环境创建，再转到第 8 节。实物的串口名、电源规格、轮序、舵机行程和相机标定值需要现场核对。
 
 ## 1. 断电接线
 
-准备树莓派及适配该型号的电源和系统盘、不含无线模块的经典 Uno R3（ATmega328P）及项目扩展板、四个直流减速电机、两台 MG995、下视摄像头、YbImu、四个 SR09 及一块五口 IIC 扩展板、对应 4P 线、HC-05 蓝牙模块、烧录及 IMU 所需的 USB 数据线，以及车载主控电源、底盘电源和舵机稳压电源。语音另需麦克风与扬声器，可复用摄像头自带的麦克风。
+准备树莓派及适配该型号的电源和系统盘、不含无线模块的经典 Uno R3（ATmega328P）及项目扩展板、四个直流减速电机、两台 MG995、下视与前视两台摄像头、YbImu、四个 SR09 及一块五口 IIC 扩展板、对应 4P 线、HC-05 蓝牙模块、烧录及 IMU 所需的 USB 数据线，以及车载主控电源、底盘电源和舵机稳压电源。语音另需麦克风与扬声器，可复用摄像头自带的麦克风。
 
 | 从哪里接 | 接到哪里 | 接线依据 |
 | --- | --- | --- |
@@ -14,6 +14,7 @@
 | Uno 主控 `G、V、A4、A5` | 五口 IIC 扩展板的 `GND、VCC、SDA、SCL` | 一个端子接主控，另四个端子各接一组 SR09。按 GND 丝印和端子方向核对线序 |
 | 前、后、左、右 SR09 | IIC 扩展板任意四个空口 | 以车体为准，前 `0x69`、后 `0x72`、左 `0x6C`、右 `0x6A`。插口并联，不需改址 |
 | 树莓派另一 USB 口 | YbImu 的 USB 数据口 | 独立串口，`115200` 波特、8N1。将 IMU 刚性固定在底盘，记录其 +X 相对车头的方向 |
+| 另一树莓派 USB 主机口 | 前视 USB 摄像头 | 固定在车头中部，完整拍到围挡标签 |
 | 树莓派 USB 主机口 | 随车下视 USB 摄像头 | 本文按 Linux 可读的 V4L2 摄像头部署。支架固定在车上，镜头朝地，棋盘固定在场地上 |
 | 电机 1、2、3、4 的两根线 | 扩展板 `M1`、`M2`、`M3`、`M4` 电机座 | 对应的 Uno **方向 / PWM** 分别为 **D2 / D3、D4 / D5、D8 / D6、D12 / D11**。沿用原调参轮序，用单轮点动记录实际车轮位置 |
 | 肩部 MG995 信号线 | 扩展板舵机接口 **D13 的 S** | 肩部指靠车体的基座关节 |
@@ -173,12 +174,13 @@ ls -l /dev/serial/by-id /dev/serial/by-path
 v4l2-ctl --list-devices
 ~~~
 
-把以下三行存入树莓派上的 `$CFG/devices.env`（例如用 `nano "$CFG/devices.env"`）。`UNO_PORT` 固定填蓝牙串口；**IMU 的示例值要换成刚查到的设备**，优先使用实机存在且唯一的 `/dev/serial/by-id/...` 链接。同型号 USB 芯片的标识重复时，可选 `by-path` 并固定 USB 插口。`CAM` 填数字，`/dev/video2` 对应 `2`。
+把以下四行存入树莓派上的 `$CFG/devices.env`（例如用 `nano "$CFG/devices.env"`）。`UNO_PORT` 固定填蓝牙串口；**IMU 的示例值要换成刚查到的设备**，优先使用实机存在且唯一的 `/dev/serial/by-id/...` 链接。同型号 USB 芯片的标识重复时，可选 `by-path` 并固定 USB 插口。下例为本次实机的顶摄和前摄；用 `ls -l /dev/v4l/by-id/` 核对型号和安装方向。
 
 ~~~bash
 export UNO_PORT=/dev/rfcomm0
 export IMU_PORT=/dev/ttyUSB0
-export CAM=0
+export CAM=/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_200901010001-video-index0
+export FRONT_CAM=/dev/v4l/by-id/usb-_Webcam_C170-video-index0
 ~~~
 
 加载设置，确认蓝牙串口存在、IMU 端口可用，摄像头列出视频采集格式，再读一帧验证取流。
@@ -187,7 +189,9 @@ export CAM=0
 source "$CFG/devices.env"
 ls -lL "$UNO_PORT" "$IMU_PORT"
 readlink -f "$UNO_PORT" "$IMU_PORT"
-v4l2-ctl -d "/dev/video$CAM" --list-formats-ext
+v4l2-ctl -d "$CAM" --list-formats-ext
+v4l2-ctl -d "$FRONT_CAM" --list-formats-ext
+python -m vision.scan front --source "$FRONT_CAM" --frames 10
 python - <<'PY'
 import os
 from contextlib import closing
@@ -199,7 +203,7 @@ with closing(frames(os.environ["CAM"], Mount())) as stream:
 PY
 ~~~
 
-记下实收分辨率及摄像头支持的其他尺寸。项目把数字 `--source` 作为实时相机，把文件名作为图片或录像。若实物是 CSI 排线相机，先确认本机 OpenCV 也能通过数字编号取到有效帧。当前采集入口使用 `cv2.VideoCapture`，没有 Picamera2 原生入口。[项目相机采集代码](vision/camera.py)
+记下实收分辨率及摄像头支持的其他尺寸。项目把数字编号与 V4L2 设备路径作为实时相机，把文件名作为图片或录像。若实物是 CSI 排线相机，先确认本机 OpenCV 也能通过数字编号取到有效帧。当前采集入口使用 `cv2.VideoCapture`，没有 Picamera2 原生入口。[项目相机采集代码](vision/camera.py)
 
 ## 4. 将合并固件烧录到 Uno
 
@@ -274,11 +278,13 @@ python -m arm --joints "$Q1" "$Q2" --config "$CFG/arm.json" --dry-run
 python -m arm --joints "$Q1" "$Q2" --config "$CFG/arm.json" --port "$UNO_PORT"
 ~~~
 
-## 6. 一台随车相机完成两种定位
+## 6. 顶摄定位与前摄墙标识别
+
+顶摄与前摄可同时工作。前摄用第 3.2 节的命令检查 36h11 墙标 1–4。顶摄完成下列标定后，可用 `python -m vision.scan top --source "$CAM" --config "$CFG/mount.json" --frames 10` 查看每个棋盘角标的编号和坐标。[双相机验收与实物角标说明](vision/README.md)
 
 ### 6.1 安装棋盘和末端标签
 
-- 九宫格平整固定在场地。实测外边长应为 **200 × 200 mm**。棋盘坐标原点在左下，向右为 +X，向上为 +Y。四角用 **tag36h11**，左下 ID 0、右下 ID 1、左上 ID 2、右上 ID 3。每个标签黑边外沿边长 **20 mm**，朝向与模板一致。图中格号从左下 0 排到右上 8，4 号中心是棋盘坐标 `(100, 100) mm`。用尺检查印后尺寸，仓库里的示意截图本身不保证打印比例。[棋盘布局](image-7.png)
+- 九宫格平整固定在场地。实测外边长应为 **200 × 200 mm**。棋盘坐标原点在左下，向右为 +X，向上为 +Y。实物印刷板四角为 5×5 图案（黑框约 15 mm），旧模板为 tag36h11（黑框 20 mm）。两版均按左下 0、右下 1、左上 2、右上 3 映射。图中格号从左下 0 排到右上 8，4 号中心是棋盘坐标 `(100, 100) mm`。用尺检查印后尺寸，仓库里的示意截图本身不保证打印比例。[棋盘布局](image-7.png)
 - 末端默认用 **tag36h10 / ID 100**，固定在末端、码面朝上并平行于棋盘。将车停到作业位，用实际镜头检查对焦、曝光和遮挡。要测量末端，画面须同时检出至少两个棋盘角标与末端标签。约 1.5 m 高度下，应以实收画面中能稳定识别小标签的分辨率进行标定。
 - 用 `nano "$CFG/mount.json"` 保存下面的配置。`image_size` 改为摄像头确实支持的宽、高。`height_mm` 从镜头中心量到棋盘平面，`tip_height_mm` 从棋盘面量到末端标签面。`tip_offset_mm` 是标签中心到实际指尖沿标签自身“向右、向上”的毫米偏移量。`0` 只适用于相应的高度差或偏移确实为零时。
 
@@ -320,7 +326,7 @@ python -m vision.robot --source "$CAM" --config "$CFG/rig.json" \
 python -m vision.robot --source "$CAM" --config "$CFG/vehicle.json" --cell 4
 ~~~
 
-将车移到第二个实测点，改变朝向，对比 `pose.x_m`、`pose.y_m`、`pose.yaw_rad` 与尺量结果。输出角度为**弧度**，逆时针 90° 约为 `+1.57`。`--cell 4` 会同时输出同一帧的 `arm` 观测，可用于仅有一个摄像头时的联合测量。场地摆法变了，用 `--field` 指向实测的场地 JSON，标定车体、读取车体位姿及后续融合时都使用同一文件。下视视野看不到固定参照时，`pose` 会为 `null`。需要扩大覆盖时，现有代码可读额外的已测量地面标签。墙面标签仅在实际入镜且有内参及标签安装高度时可用。[场地布局](image-2.png) · [场地配置字段与示例](vision/README.md)
+将车移到第二个实测点，改变朝向，对比 `pose.x_m`、`pose.y_m`、`pose.yaw_rad` 与尺量结果。输出角度为**弧度**，逆时针 90° 约为 `+1.57`。`--cell 4` 会同时输出同一帧的 `arm` 观测，可用于顶摄联合测量。场地摆法变了，用 `--field` 指向实测的场地 JSON，标定车体、读取车体位姿及后续融合时都使用同一文件。下视视野看不到固定参照时，`pose` 会为 `null`。需要扩大覆盖时，现有代码可读额外的已测量地面标签。墙面标签仅在实际入镜且有内参及标签安装高度时可用。[场地布局](image-2.png) · [场地配置字段与示例](vision/README.md)
 
 **闭环驱动机械臂。** 结束占用摄像头和 Uno 的其他命令，停稳底盘，确认当前位置的目标格在机械臂可达范围内。下面的命令同时使用舵机和相机标定。若只部署机械臂，可在 `--config` 处直接使用第 6.2 节生成的 `rig.json`。
 

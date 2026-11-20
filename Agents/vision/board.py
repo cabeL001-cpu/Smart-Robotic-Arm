@@ -18,6 +18,12 @@ BOARD = {("36h11", i): square(x, y, 20) for i, (x, y) in
          enumerate(((10, 10), (190, 10), (10, 190), (190, 190)))}
 
 
+# 实物印刷版的黑框约 15 mm，外侧两条边贴着 200 mm 棋盘的外沿。
+BOARD_LAYOUT = dict(BOARD)
+for ident, (x, y) in enumerate(((7.5, 7.5), (192.5, 7.5), (7.5, 192.5), (192.5, 192.5))):
+    BOARD_LAYOUT["printed5", ident] = square(x, y, 15)
+
+
 def project(matrix, points):
     pts = np.asarray(points, dtype=np.float64).reshape(-1, 1, 2)
     return cv2.perspectiveTransform(pts, matrix).reshape(-1, 2)
@@ -31,8 +37,11 @@ class Plane:
     rms_px: float
 
 
-def fit_plane(tags, layout=BOARD, min_tags=2, tolerance_px=3.0):
+def fit_plane(tags, layout=BOARD_LAYOUT, min_tags=2, tolerance_px=3.0):
     keys = sorted(layout.keys() & tags.keys())
+    if any(key[0] == "printed5" for key in keys):
+        # 实物板与旧模板二选一，排除与旧角标同号的墙标。
+        keys = [key for key in keys if key not in BOARD]
     if len(keys) < min_tags:
         return None
     xy = np.vstack([layout[k] for k in keys])
