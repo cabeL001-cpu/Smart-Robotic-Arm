@@ -6,7 +6,7 @@ UNO_PORT 或命令行的 --port 改回 USB 串口（如 /dev/ttyACM0）。
 
 import os
 from contextlib import contextmanager
-from time import monotonic
+from time import monotonic, sleep
 
 DEFAULT_PORT = os.environ.get("UNO_PORT", "/dev/rfcomm0")
 # 须与 HC-05 的 UART 波特率一致。模块出厂为 9600，改过则用 AT+UART=9600,0,0 改回。
@@ -20,9 +20,9 @@ class MotionBlocked(OSError):
     """Uno 已因方向净空不足或测距缺失而保持停车。"""
 
 
-def stop_wheels(link):
+def stop_wheels(link, deadline=None):
     # 蓝牙链路刚建立时开头几个字节可能丢失，持续重发直到 Uno 确认停车。
-    deadline = monotonic() + HANDSHAKE_SECONDS
+    deadline = deadline or monotonic() + HANDSHAKE_SECONDS
     while monotonic() < deadline:
         link.write(b"STOP\n")
         if link.readline().strip() == b"OK STOP":
@@ -53,20 +53,36 @@ def _check_port(port):
         )
 
 
+def _open_port(serial, port):
+    try:
+        return serial.Serial(port, BAUD_RATE, timeout=0.25, write_timeout=1, exclusive=True)
+    except serial.SerialException as error:
+        hint = ""
+        if port.startswith("/dev/rfcomm"):
+            hint = "；权限不足时执行 sudo chown $USER " + port
+        raise OSError(f"{port} 打不开：{error}{hint}") from error
+
+
 @contextmanager
 def open_uno(port=DEFAULT_PORT):
     """建立独占串口并停车同步。调用方在同一连接上顺序执行动作。"""
     import serial
 
     _check_port(port)
-    try:
-        link = serial.Serial(port, BAUD_RATE, timeout=0.25, write_timeout=1, exclusive=True)
-    except serial.SerialException as error:
-        hint = ""
-        if port.startswith("/dev/rfcomm"):
-            hint = "；权限不足时执行 sudo chown $USER " + port
-        raise OSError(f"{port} 打不开：{error}{hint}") from error
+    deadline = monotonic() + HANDSHAKE_SECONDS
+    while True:
+        link = _open_port(serial, port)
+        try:
+            link.reset_input_buffer()
+            stop_wheels(link, deadline)
+        except (serial.SerialException, TimeoutError):
+            # 上一个进程刚退出时模块仍在重连，节点会短暂报“设备已断开”。
+            # 关掉节点重新打开，让内核重新发起 RFCOMM 连接。
+            link.close()
+            if monotonic() >= deadline:
+                raise
+            sleep(1)
+        else:
+            break
     with link:
-        link.reset_input_buffer()
-        stop_wheels(link)
         yield link
