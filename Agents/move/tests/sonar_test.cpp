@@ -118,6 +118,7 @@ int main() {
     assert(joints(SHOULDER_MIN_US - 1, ELBOW_MIN_US) == "ERR ARM\n");
     assert(!shoulderServo.active && !elbowServo.active);
     assert(joints(SHOULDER_MIN_US, ELBOW_MAX_US) == "OK ARM\n");
+    assert(shoulderServo.signalPin == 13 && elbowServo.signalPin == 10);
     assert(shoulderServo.pulse == SHOULDER_MIN_US && elbowServo.pulse == ELBOW_MAX_US);
     assert(joints(SHOULDER_MAX_US, ELBOW_MAX_US + 1) == "ERR ARM\n");
     assert(shoulderServo.pulse == SHOULDER_MIN_US && elbowServo.pulse == ELBOW_MAX_US);

@@ -1,9 +1,9 @@
 #include <Servo.h>
 #include "arm_limits.h"
 
-// 扩展板的两个舵机信号口。与 M1 至 M4 使用的八个引脚互不重叠。
+// 肩部接扩展板 D13 信号针，肘部接 Uno 数字 D10。D10 同时控制扩展板 VOUT，须保持 VOUT 空载。
 const uint8_t SHOULDER_PIN = 13;
-const uint8_t ELBOW_PIN = 7;
+const uint8_t ELBOW_PIN = 10;
 Servo shoulderServo;
 Servo elbowServo;
 
