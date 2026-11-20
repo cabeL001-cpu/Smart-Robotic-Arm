@@ -32,7 +32,7 @@ def forward(shoulder_deg, elbow_deg, geometry=Geometry()):
             g.base_y_mm + g.upper_mm * sin(first) + g.forearm_mm * sin(second))
 
 
-def inverse(x_mm, y_mm, geometry=Geometry(), previous=(0.0, 0.0)):
+def inverse(x_mm, y_mm, geometry=Geometry(), previous=(0.0, 0.0), *, joint_limits=None):
     """排除超限解，选择距上次关节角最近的肘部构型。"""
     g = geometry
     dx, dy = x_mm - g.base_x_mm, y_mm - g.base_y_mm
@@ -46,7 +46,10 @@ def inverse(x_mm, y_mm, geometry=Geometry(), previous=(0.0, 0.0)):
         shoulder_deg = (degrees(shoulder) - g.base_yaw_deg + 180) % 360 - 180
         elbow_deg = degrees(elbow)
         if abs(shoulder_deg) <= g.shoulder_limit_deg and abs(elbow_deg) <= g.elbow_limit_deg:
-            candidates.append((shoulder_deg, elbow_deg))
+            angles = shoulder_deg, elbow_deg
+            if joint_limits is None or all(lo - 1e-9 <= q <= hi + 1e-9
+                                           for q, (lo, hi) in zip(angles, joint_limits)):
+                candidates.append(angles)
     if not candidates:
         raise ValueError("目标超出关节角度范围")
     return min(candidates, key=lambda q: hypot(q[0] - previous[0], q[1] - previous[1]))

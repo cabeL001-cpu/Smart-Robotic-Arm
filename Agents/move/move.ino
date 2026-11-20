@@ -1,37 +1,55 @@
 // Uno 串口入口。各动作直接调用 move_func.ino 中已调好的电机函数。
+#include "sonar.h"
+
 const unsigned long BAUD_RATE = 9600;
 const uint16_t DEFAULT_DURATION_MS = 1000;
 
-unsigned long motionStartedAt;
+uint32_t motionStartedAt;
 uint16_t motionDurationMs = 0;  // 0 表示四轮已停车
+uint8_t motionDirections = 0;
 
 void setup() {
   initMotorPins();
   stop();
   Serial.begin(BAUD_RATE);
+  sonar::begin();
 }
 
-bool runMotion(const char *name) {
+void startMotion(const char *name, uint16_t durationMs) {
+  using namespace sonar;
   static const struct {
     const char *name;
     void (*run)();
+    uint8_t directions;
   } motions[] = {
-    {"GO", go},                       {"BACK", back},
-    {"LEFT", moveLeft},               {"RIGHT", moveRight},
-    {"FORWARD-LEFT", moveForwardLeft}, {"FORWARD-RIGHT", moveForwardRight},
-    {"BACK-LEFT", moveBackLeft},       {"BACK-RIGHT", moveBackRight},
-    {"ROTATE-LEFT", rotateLeft},       {"ROTATE-RIGHT", rotateRight},
-    {"TURN-RIGHT-LEFT-WHEELS", turnRightWithLeftWheels},
-    {"TURN-RIGHT-FRONT-WHEELS", turnRightWithFrontWheels},
-    {"M1", m1Forward}, {"M2", m2Forward}, {"M3", m3Forward}, {"M4", m4Forward}
+    {"GO", go, FRONT}, {"BACK", back, BACK},
+    {"LEFT", moveLeft, LEFT}, {"RIGHT", moveRight, RIGHT},
+    {"FORWARD-LEFT", moveForwardLeft, FRONT | LEFT},
+    {"FORWARD-RIGHT", moveForwardRight, FRONT | RIGHT},
+    {"BACK-LEFT", moveBackLeft, BACK | LEFT},
+    {"BACK-RIGHT", moveBackRight, BACK | RIGHT},
+    {"ROTATE-LEFT", rotateLeft, ALL}, {"ROTATE-RIGHT", rotateRight, ALL},
+    {"TURN-RIGHT-LEFT-WHEELS", turnRightWithLeftWheels, ALL},
+    {"TURN-RIGHT-FRONT-WHEELS", turnRightWithFrontWheels, ALL},
+    {"M1", m1Forward, ALL}, {"M2", m2Forward, ALL},
+    {"M3", m3Forward, ALL}, {"M4", m4Forward, ALL}
   };
   for (const auto &motion : motions) {
     if (strcmp(name, motion.name) == 0) {
+      int8_t blocker = blockedDirection(motion.directions);
+      if (blocker >= 0) {
+        reportBlocked(blocker);
+        return;
+      }
+      motionDirections = motion.directions;
+      motionStartedAt = millis();
+      motionDurationMs = durationMs;
       motion.run();
-      return true;
+      Serial.println(F("OK MOVE"));
+      return;
     }
   }
-  return false;
+  Serial.println(F("ERR ACTION"));
 }
 
 // 线上时长是十进制毫秒数，范围取自 uint16_t。用 0 表示解析失败。
@@ -46,6 +64,10 @@ uint16_t parseDuration(const char *digits) {
 }
 
 void handleCommand(char *line) {
+  if (strcmp(line, "SONAR") == 0 || strncmp(line, "SONAR ", 6) == 0) {
+    sonar::handleCommand(line, motionDurationMs != 0);
+    return;
+  }
   if (strncmp(line, "ARM ", 4) == 0) {
     setArmPulses(line + 4);
     return;
@@ -71,21 +93,19 @@ void handleCommand(char *line) {
     Serial.println(F("ERR BUSY"));
     return;
   }
-  if (!runMotion(line)) {
-    Serial.println(F("ERR ACTION"));
-    return;
-  }
-  motionStartedAt = millis();
-  motionDurationMs = durationMs;
-  Serial.println(F("OK MOVE"));
+  startMotion(line, durationMs);
 }
 
 void loop() {
-  // 用经过时间判断到期，millis() 回绕时仍成立。计时期间也能接收 STOP。
-  if (motionDurationMs != 0 && millis() - motionStartedAt >= motionDurationMs) {
-    stop();
-    motionDurationMs = 0;
-    Serial.println(F("DONE"));
+  sonar::poll();
+  if (motionDurationMs != 0) {
+    int8_t blocker = sonar::blockedDirection(motionDirections);
+    if (blocker >= 0 || millis() - motionStartedAt >= motionDurationMs) {
+      stop();
+      motionDurationMs = 0;
+      if (blocker >= 0) sonar::reportBlocked(blocker);
+      else Serial.println(F("DONE"));
+    }
   }
 
   static char line[40];

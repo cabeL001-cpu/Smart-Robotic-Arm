@@ -1,6 +1,6 @@
 # YbImu 九轴平面定位
 
-IMU 用独立的 USB 串口接树莓派，默认协议为 115200、8N1。底盘和机械臂共用的 Uno 是另一台 9600 波特设备。运行前用 `python3 -m serial.tools.list_ports -v` 区分两个端口。下列命令均从 `Agents` 运行。
+IMU 用独立的 USB 串口接树莓派，默认协议为 115200、8N1。底盘和机械臂共用的 Uno 由车载电源供电，经另一位同学提供的蓝牙链路通信。用 `python3 -m serial.tools.list_ports -v` 核对 IMU 的 USB 节点，并单独记录蓝牙端点。下列命令均从 `Agents` 运行。
 
 ## 实时运行与原始数据记录
 

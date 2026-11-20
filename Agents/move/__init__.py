@@ -3,9 +3,9 @@
 from contextlib import nullcontext, suppress
 
 if "." in __package__:
-    from ..uno import BAUD_RATE, DEFAULT_PORT, open_uno, stop_wheels, wait_reply
+    from ..uno import BAUD_RATE, DEFAULT_PORT, MotionBlocked, open_uno, stop_wheels, wait_reply
 else:
-    from uno import BAUD_RATE, DEFAULT_PORT, open_uno, stop_wheels, wait_reply
+    from uno import BAUD_RATE, DEFAULT_PORT, MotionBlocked, open_uno, stop_wheels, wait_reply
 
 DEFAULT_DURATION_MS = 1000
 ACTIONS = (
@@ -40,6 +40,9 @@ def move(action: str, duration_ms: int = DEFAULT_DURATION_MS, *, port: str = DEF
             connection.write(command)
             wait_reply(connection, b"OK MOVE")
             wait_reply(connection, b"DONE", duration_ms / 1000 + 1)
+        except MotionBlocked:
+            # 固件已切断四轮输出，保留阻挡原因交给上层决定下一步。
+            raise
         except (KeyboardInterrupt, OSError):
             with suppress(OSError):
                 stop_wheels(connection)

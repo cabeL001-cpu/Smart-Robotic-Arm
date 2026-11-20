@@ -40,10 +40,10 @@ python3 -m vision.arm --source board.jpg --cell 4
 
 ~~~bash
 python3 -m vision.align --source 0 --config mount.json --base -150 100 0 --save-mount rig.json
-python3 -m vision.align --source 0 --config rig.json --arm-config arm-calibration.json --cell 4 --port /dev/ttyACM0
+python3 -m vision.align --source 0 --config rig.json --arm-config arm-calibration.json --cell 4 --port "$UNO_PORT"
 ~~~
 
-首次用实测基座姿态求逆解，待舵机响应后按实测偏差修正。棋盘与末端同时可见时才更新动作，连续两秒到位后返回，超时或达到修正次数会报出未到位。测试时先单独运行 `vision.arm` 核对尺度、方向和观测，再接通机械臂。[关节和串口标定](../arm/README.md)
+`UNO_PORT` 取蓝牙链路提供的串行端点。先按实车标定肩、肘的最大位置、退回方向和脉宽，烧录相同限位。闭环对每次修正都检查 90° 行程和端点余量。超出可达区域时报告错误。首次用实测基座姿态求逆解，待舵机响应后按实测偏差修正。棋盘与末端同时可见时才更新动作，连续两秒到位后返回，超时或达到修正次数会报出未到位。测试时先单独运行 `vision.arm` 核对尺度、方向和观测，再接通机械臂。[关节和串口标定](../arm/README.md)
 
 ## 机器人场地位姿
 

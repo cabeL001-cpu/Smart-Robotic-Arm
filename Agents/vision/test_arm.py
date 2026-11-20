@@ -63,9 +63,15 @@ class ArmVisionTests(unittest.TestCase):
                 center = target_xy(4) if sent else (80, 80)
                 self.tags["36h10", 100] = project(self.h, square(*center, 14))
                 yield i * .4, self.plane, measure(self.tags, self.plane, (640, 600), 4, mount)
-        final = align(4, samples(), sent.append, mount, ArmConfig())
+        cfg = ArmConfig()
+        cfg = replace(cfg, shoulder=replace(cfg.shoulder, angle_at_max_deg=15),
+                      elbow=replace(cfg.elbow, angle_at_max_deg=130))
+        final = align(4, samples(), sent.append, mount, cfg)
         self.assertLess(final.error_mm, .001)
-        from .align import inverse  # 同一位置允许两个肘部构型
         self.assertEqual(len(sent), 1)
-        nominal = replace(ArmConfig().geometry, base_x_mm=-150, base_y_mm=100)
-        np.testing.assert_allclose(sent[0], inverse(100, 100, nominal, previous=sent[0]), atol=1e-4)
+        nominal = replace(cfg.geometry, base_x_mm=-150, base_y_mm=100)
+        np.testing.assert_allclose(sent[0], cfg.solve(100, 100, geometry=nominal), atol=1e-4)
+        sent.clear()
+        with self.assertRaises(ValueError):
+            align(4, samples(), sent.append, mount, replace(cfg, shoulder=cfg.elbow))
+        self.assertFalse(sent)

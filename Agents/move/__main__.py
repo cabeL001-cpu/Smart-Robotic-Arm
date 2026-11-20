@@ -2,7 +2,7 @@
 
 import argparse
 
-from . import ACTIONS, DEFAULT_DURATION_MS, DEFAULT_PORT, encode_command, move
+from . import ACTIONS, DEFAULT_DURATION_MS, DEFAULT_PORT, MotionBlocked, encode_command, move
 
 
 def main():
@@ -24,6 +24,8 @@ def main():
         parser.error(str(error))
     except ModuleNotFoundError as error:
         parser.exit(1, f"{error}。请在当前 Python 环境安装 move/requirements.txt 中的依赖。\n")
+    except MotionBlocked as error:
+        parser.exit(1, f"底盘因避障保持停车：{error}\n")
     except OSError as error:
         parser.exit(1, f"串口控制失败：{error}\n")
     except KeyboardInterrupt:

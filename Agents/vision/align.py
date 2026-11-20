@@ -12,10 +12,10 @@ from .camera import Mount, frames
 from .tags import Detector
 
 if "." in __package__:
-    from ..arm import ArmConfig, inverse, set_joints
+    from ..arm import ArmConfig, set_joints
     from ..uno import open_uno, DEFAULT_PORT
 else:
-    from arm import ArmConfig, inverse, set_joints
+    from arm import ArmConfig, set_joints
     from uno import open_uno, DEFAULT_PORT
 
 
@@ -51,7 +51,7 @@ def align(cell, samples, send, mount, config, settle_s=0.6, max_steps=10, timeou
             aim += 0.7 * (target - np.asarray(obs.tip_mm))
         base, yaw = axes(plane, mount.arm_base_px, mount.arm_x_px)
         geometry = replace(config.geometry, base_x_mm=base[0], base_y_mm=base[1], base_yaw_deg=yaw)
-        previous = inverse(*aim, geometry, previous)
+        previous = config.solve(*aim, geometry=geometry, previous=previous)
         send(previous)
         sent_at, steps = t, steps + 1
     raise RuntimeError("观测结束或超时，未取得连续两秒到位观测")
@@ -88,6 +88,10 @@ def main():
     config = ArmConfig.load(args.arm_config) if args.arm_config else ArmConfig()
     if not mount.arm_base_px or not mount.arm_x_px:
         p.error("请先用 --save-mount 生成基座投影标定")
+    try:
+        config.joint_limits()
+    except ValueError as error:
+        p.error(str(error))
     with open_uno(args.port) as link:
         result = align(args.cell, observations(args.source, mount, args.cell),
                        lambda angles: set_joints(angles, config=config, link=link), mount, config)

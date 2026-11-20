@@ -1,29 +1,31 @@
 # 银立方机器人 · 树莓派部署指南
 
-本文对应仓库版本 `b4cac7b`。树莓派运行 Python，经典 Arduino Uno 运行一份同时驱动四轮和两台 MG995 的固件。车上只有一台距地约 1.5 m 的下视摄像头，供机械臂与车体定位共用。YbImu 通过自己的 USB 串口把数据送到树莓派。
+树莓派运行 Python，实车用蓝牙与独立供电的 Arduino Uno 交换命令。Uno 一份固件负责四向 SR09 避障、四轮和两台 MG995。车上只有一台距地约 1.5 m 的下视摄像头，供机械臂与车体定位共用。YbImu 通过自己的 USB 串口把数据送到树莓派。
 
-首次装机按第 1–7 节进行。**只验收四轮**时，第 2 节只装 `move/requirements.txt` 并运行底盘预览，第 3 节只识别 `UNO_PORT`，随后烧录第 4 节的完整草图，执行第 5.1 节的停车和点动。只部署语音时，先完成第 2 节的代码复制和虚拟环境创建，再转到第 8 节。实物的串口名、电源规格、轮序、舵机行程和相机标定值需要现场核对。
+首次装机按第 1–7 节进行。**只验收四轮**时，第 2 节只装 `move/requirements.txt` 并运行底盘预览，第 3 节只识别 `UNO_PORT`，随后烧录第 4 节的完整草图，按第 5.1 节验证四个 SR09 后点动。只部署语音时，先完成第 2 节的代码复制和虚拟环境创建，再转到第 8 节。实物的串口名、电源规格、轮序、舵机行程和相机标定值需要现场核对。
 
 ## 1. 断电接线
 
-准备树莓派及适配该型号的电源和系统盘、Uno R3（ATmega328P）及项目扩展板、四个直流减速电机、两台 MG995、下视摄像头、YbImu、两根能传数据的 USB 线，以及底盘电源和舵机稳压电源。语音另需麦克风与扬声器，可复用摄像头自带的麦克风。
+准备树莓派及适配该型号的电源和系统盘、Uno R3（ATmega328P）及项目扩展板、四个直流减速电机、两台 MG995、下视摄像头、YbImu、四个 SR09 及一块五口 IIC 扩展板、对应 4P 线、蓝牙模块、烧录及 IMU 所需的 USB 数据线，以及车载主控电源、底盘电源和舵机稳压电源。语音另需麦克风与扬声器，可复用摄像头自带的麦克风。
 
 | 从哪里接 | 接到哪里 | 接线依据 |
 | --- | --- | --- |
-| 树莓派 USB 主机口 | Uno 板载 USB 口 | 一条线传底盘和机械臂命令，`9600` 波特、8N1 |
-| 树莓派另一 USB 口 | YbImu 的 USB 数据口 | 独立串口，`115200` 波特、8N1。将 IMU 刚性固定在底盘，记录其 +X 相对车头的方向 |
+| 树莓派蓝牙 | 车载蓝牙模块与 Uno 的控制端 | 由通信模块负责人提供已就绪的字节流或虚拟串口。固件仍使用 9600 波特、8N1、换行结尾的 ASCII 指令 |
+| Uno 主控 `G、V、A4、A5` | 五口 IIC 扩展板的 `GND、VCC、SDA、SCL` | 一个端子接主控，另四个端子各接一组 SR09。按 GND 丝印和端子方向核对线序 |
+| 前、后、左、右 SR09 | IIC 扩展板任意四个空口 | 以车体为准，前 `0x69`、后 `0x72`、左 `0x6C`、右 `0x6A`。插口并联，不需改址 |
+| 树莓派 USB 口 | YbImu 的 USB 数据口 | 独立串口，`115200` 波特、8N1。将 IMU 刚性固定在底盘，记录其 +X 相对车头的方向 |
 | 树莓派 USB 主机口 | 随车下视 USB 摄像头 | 本文按 Linux 可读的 V4L2 摄像头部署。支架固定在车上，镜头朝地，棋盘固定在场地上 |
 | 电机 1、2、3、4 的两根线 | 扩展板 `M1`、`M2`、`M3`、`M4` 电机座 | 对应的 Uno **方向 / PWM** 分别为 **D2 / D3、D4 / D5、D8 / D6、D12 / D11**。沿用原调参轮序，用单轮点动记录实际车轮位置 |
 | 肩部 MG995 信号线 | 扩展板舵机接口 **D13 的 S** | 肩部指靠车体的基座关节 |
 | 肘部 MG995 信号线 | 扩展板舵机接口 **D7 的 S** | 肘部指连接两段臂的关节 |
 | 两台 MG995 的电源正线、地线 | 外接舵机稳压电源的 `+`、`−` | 再将该电源 `−` 接 Uno `GND`，让舵机信号共地。用分线接头将正线单独引到外部电源，避免把两个电源的正极并在一起 |
-| 底盘电池或匹配的电源 | 扩展板主电源输入 **VIN1**，按实物 `+ / −` | 按扩展板和电机实际额定值选电压，图示 VIN1 上限为 12 V。树莓派用自己的电源，USB 只承担 Uno 的逻辑供电与通信 |
+| 底盘电池或匹配的电源 | 扩展板主电源输入 **VIN1**，按实物 `+ / −` | 按扩展板和电机实际额定值选电压，图示 VIN1 上限为 12 V。树莓派用自己的电源。实车运行时拔除树莓派与 Uno 间的 USB，Uno 逻辑、驱动和舵机由车载供电系统承担 |
 
-先对准 Uno 与扩展板排针，再按丝印识别端子和舵机三根线。MG995 不同批次的线色和行程可能有差异。外置稳压电源应覆盖两台舵机同时动作的峰值电流。底盘电机和舵机的负载电流都走各自供电线路。上述 USB 接法无需占用树莓派的 40 针 GPIO。[扩展板接口实物图](image-8.png) · [Uno 固件引脚](move/arm_control.ino) · [Raspberry Pi 各型号电源要求](https://www.raspberrypi.com/documentation/computers/getting-started.html)
+先对准 Uno 与扩展板排针，再按丝印识别端子和舵机三根线。MG995 不同批次的线色和行程可能有差异。外置稳压电源应覆盖两台舵机同时动作的峰值电流。底盘电机和舵机的负载电流都走各自供电线路。四个探头共用 Uno 的 IIC 总线。蓝牙只传数据，负载电压和电流仍由车载电源决定。[扩展板接口实物图](image-8.png) · [Uno 固件引脚](move/arm_control.ino) · [Raspberry Pi 各型号电源要求](https://www.raspberrypi.com/documentation/computers/getting-started.html)
 
 首次通电时将车轮架空，支撑机械臂并留出摆动空间。先保持电机和舵机的负载电源关闭，只接通树莓派与 Uno 逻辑电源。完成第 4 节烧录和第 5.1 节的停车握手后，再分路接通负载做点动测试。
 
-如果现场沿用 USB 转 TTL 模块，树莓派 USB 接转换器，使用电平与 Uno 兼容的模块，将 TX 接 Uno RX（D0），RX 接 Uno TX（D1），GND 接 Uno GND。给 Uno 单独提供合规的逻辑电源，转换器 VCC 留空。烧录和运行分别选用一条串口路径，避免板载 USB 和外接模块同时驱动 D0/D1。
+板载 USB 留给烧录和负载断电的台架诊断。若蓝牙模块与上传程序共用 Uno 的硬件串口，烧录时按接线方案隔离占用，再恢复运行接线。带载前检查轮子起动和舵机动作时的实际电压。
 
 ## 2. 准备树莓派系统和代码
 
@@ -44,7 +46,7 @@ sudo usermod -aG dialout,video "$USER"
 
 **复制项目，选一种来源。**
 
-- 要部署当前电脑上的代码，在 **Windows PowerShell** 运行下列两行。目标是树莓派用户主目录下的项目目录。复制整个 `Agents` 能保留 Uno 草图的三个文件、Python 包和测试用图。已有同名部署时，先选一个空目录或备份实车上的本地改动，再复制。
+- 要部署当前电脑上的代码，在 **Windows PowerShell** 运行下列两行。目标是树莓派用户主目录下的项目目录。复制整个 `Agents` 能保留 Uno 草图、超声波驱动、舵机限位头文件、Python 包和测试用图。功能仍在本机工作区时，用这条路径取得当前代码。已有同名部署时，先选一个空目录或备份实车上的本地改动，再复制。
 
 ~~~powershell
 ssh operator@robot.local "mkdir -p ~/Smart-Robotic-Arm"
@@ -91,16 +93,16 @@ PY
 
 ~~~bash
 python -m move go --ms 250 --dry-run
-python -m arm --cell 4 --dry-run
-python -m unittest -v arm.test_arm vision.test_arm vision.test_robot move.imu.test_imu
+python -m move.sonar --help
+python -m unittest -v arm.test_arm move.test_sonar vision.test_arm vision.test_robot move.imu.test_imu
 python -m vision.arm --source image-7.png --cell 4
 ~~~
 
-底盘预览输出 `GO 250`，默认机械臂参数输出 `ARM 1073 2203`，单元测试应以 `OK` 结束。最后一条读取仓库中的棋盘示例图，图中没有末端标签，预期 `measurement` 为 `null`、`arrived` 为 `false`。
+底盘预览输出 `GO 250`，超声波帮助列出 `scan` 与 `read`，单元测试应以 `OK` 结束。最后一条读取仓库中的棋盘示例图，图中没有末端标签，预期 `measurement` 为 `null`、`arrived` 为 `false`。机械臂的动作预览需要第 5.2 节的关节标定。
 
 ## 3. 辨认 Uno、IMU 和摄像头
 
-先插 Uno，列一次设备，再插 YbImu，重跑串口枚举。对照新增项的描述、USB 物理位置和端口名贴标签。两块板可能都显示为 `ttyUSB*`。插入摄像头后用 V4L2 找到它实际输出图像的节点。
+运行时从蓝牙负责人处取得 Uno 控制端点。下列 CLI 适用于对方已提供虚拟串口的方案，例如 `/dev/rfcomm0`。若交付的是 Python 字节流对象，调用方可向 `MHS.move`、`MHS.arm` 传入已握手的 `link`，并用 `move.sonar.read(link)` 查询。下面的 USB 枚举用于 IMU、摄像头和临时烧录设备。
 
 ~~~bash
 lsusb
@@ -109,10 +111,10 @@ ls -l /dev/serial/by-id /dev/serial/by-path
 v4l2-ctl --list-devices
 ~~~
 
-把以下三行存入树莓派上的 `$CFG/devices.env`（例如用 `nano "$CFG/devices.env"`），**将示例值换成刚查到的设备**。优先使用实机存在且唯一的 `/dev/serial/by-id/...` 链接。同型号 USB 芯片的标识重复时，可选 `by-path` 并固定 USB 插口。没有这些目录时，用逐一插拔确认的设备节点。`CAM` 填数字，`/dev/video2` 对应 `2`。
+把下面三行存入 `$CFG/devices.env`，将示例值改为实际设备。`UNO_PORT` 是运行用蓝牙端点，`IMU_PORT` 是 IMU 的 USB 串口，可取唯一的 `/dev/serial/by-id/...`。`CAM` 是 OpenCV 的数字设备号。
 
 ~~~bash
-export UNO_PORT=/dev/ttyACM0
+export UNO_PORT=/dev/rfcomm0  # 仅当蓝牙负责人提供此设备节点
 export IMU_PORT=/dev/ttyUSB0
 export CAM=0
 ~~~
@@ -139,11 +141,11 @@ PY
 
 ## 4. 将合并固件烧录到 Uno
 
-`move/move.ino` 是草图入口，`move_func.ino` 是原有轮控参数，`arm_control.ino` 是两路舵机驱动。**将整个 `move` 草图作为一个单元烧录一次**。烧录会替换 Uno 当前固件，四轮保持架空、负载电源保持关闭。
+`move/move.ino` 是入口，`move_func.ino` 保留轮控参数，`sonar.cpp`、`sonar.h` 负责四向避障，`arm_control.ino` 和 `arm_limits.h` 执行两轴脉宽限位。编译整个 `move` 目录。已完成第 5.2 节标定时先导出限位头文件，否则默认固件仅锁定舵机，仍可验收避障。烧录时四轮架空、负载电源关闭。
 
-**用电脑上的 Arduino IDE。** 打开 `Agents/move/move.ino`，确认同一草图中有上述三个文件。在开发板管理器安装 **Arduino AVR Boards**，选择 **Arduino Uno**。库管理器安装 Arduino 的 **Servo** 库。选择插拔 Uno 时出现的实际 COM 端口，先“验证”，再“上传”。看到上传成功后关闭串口监视器，将 Uno 的 USB 数据线接回树莓派，重新核对 `UNO_PORT`。[Arduino Uno R3 板卡资料](https://docs.arduino.cc/hardware/uno-rev3/)
+**用电脑上的 Arduino IDE。** 打开 `Agents/move/move.ino`，安装支持 `Wire.setWireTimeout` 的 Arduino AVR Boards（已测试 1.8.8）及 Servo 库，选择 **Arduino Uno** 与烧录用 USB 的实际 COM 口。验证并上传完整草图，关闭串口监视器、拔除烧录线，给 Uno 独立供电后使用蓝牙控制端点。[Arduino Uno R3 板卡资料](https://docs.arduino.cc/hardware/uno-rev3/)
 
-**也可在树莓派用 Arduino CLI。** 以下命令用 Arduino 官方安装脚本按系统架构下载 CLI，安装到当前用户的 `~/.local/bin`。已有 CLI 时可从 `arduino-cli version` 开始。编译结果写入临时目录，上传时使用同一目录。Uno 此时接在树莓派上，`move` 指当前 `Agents` 目录下的草图。[CLI 安装](https://docs.arduino.cc/arduino-cli/installation/) · [官方安装脚本](https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh) · [CLI 编译与上传](https://docs.arduino.cc/arduino-cli/getting-started/)
+**也可在树莓派用 Arduino CLI。** 以下命令用 Arduino 官方安装脚本按系统架构下载 CLI，安装到当前用户的 `~/.local/bin`。已有 CLI 时可从 `arduino-cli version` 开始。编译结果写入临时目录，上传时使用同一目录。临时将 Uno 用 USB 接到编译机，`FLASH_PORT` 专指这次 USB 烧录端口。上传完成后拔线，运行时继续用 `UNO_PORT`。[CLI 安装](https://docs.arduino.cc/arduino-cli/installation/) · [官方安装脚本](https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh) · [CLI 编译与上传](https://docs.arduino.cc/arduino-cli/getting-started/)
 
 ~~~bash
 mkdir -p "$HOME/.local/bin"
@@ -158,20 +160,23 @@ arduino-cli lib install Servo
 arduino-cli board list
 UNO_BUILD=$(mktemp -d)
 arduino-cli compile --fqbn arduino:avr:uno --build-path "$UNO_BUILD" move
-arduino-cli upload --fqbn arduino:avr:uno --port "$UNO_PORT" --input-dir "$UNO_BUILD" move
+read -r -p "请输入 board list 中的 Uno USB 烧录端口 " FLASH_PORT
+arduino-cli upload --fqbn arduino:avr:uno --port "$FLASH_PORT" --input-dir "$UNO_BUILD" move
 ~~~
 
 ## 5. 分别验收四轮和机械臂
 
 ### 5.1 底盘停车与点动
 
-1. 先只给 Uno 逻辑供电。在已激活虚拟环境的 `Agents` 目录运行下面的停车命令。可见 **Uno 已确认停车。** 才继续。
+1. 给 Uno、蓝牙模块和四个 SR09 接通车载逻辑供电，保持轮臂负载断电。先握手停车，确认终端显示“Uno 已确认停车。”，再扫描，预期依次显示 `0x69 0x72 0x6C 0x6A`。用 `read --watch`，待约 2 秒预热并完成首轮采样后，拿平板逐个靠近探头，核对方向和毫米值。按 **Ctrl+C** 结束读数。
 
 ~~~bash
 python -m move stop --port "$UNO_PORT"
+python -m move.sonar scan --port "$UNO_PORT"
+python -m move.sonar read --port "$UNO_PORT" --watch
 ~~~
 
-2. 保持四轮离地，接通底盘电源。一次只执行一条命令，观察哪个轮子转、转向是否符合装配、到时是否停下，记录 `M1–M4` 对应的实际轮位。
+2. 保持四轮离地，接通底盘电源。确认四向都有大于阈值的有效回波后，一次只执行一条命令，观察哪个轮子转、转向是否符合装配、到时是否停下，记录 `M1–M4` 对应的实际轮位。
 
 ~~~bash
 python -m move m1 --ms 200 --port "$UNO_PORT"
@@ -182,29 +187,28 @@ python -m move m4 --ms 200 --port "$UNO_PORT"
 
 3. 四路独立点动通过后，架空运行 `python -m move go --ms 250 --port "$UNO_PORT"`，应四轮同时动作、到时停止。再放到平整空地，短时验证 `go`、`left`、`rotate-left` 的实车方向。若单轮转向错误，先断开驱动电源，再核对轮位及电机两线极性。
 
-每次定时动作由 Uno 自行计时。运行中的底盘命令可按 **Ctrl+C** 提前请求停车。`STOP` 控制四轮，舵机在收到关节命令后会继续保持输出。同一时刻只让一个进程占用 Uno 串口，连续控制轮和臂时可用 `MHS.open_uno` 复用一次连接，避免再次打开 USB 端口导致 Uno 复位。[底盘动作与串口回执](move/README.md) · [共享串口调用示例](arm/README.md)
+每次定时动作由 Uno 自行计时。运行中的底盘命令可按 **Ctrl+C** 提前请求停车。`STOP` 控制四轮，舵机在收到关节命令后会继续保持输出。同一时刻只让一个进程占用 Uno 串口，连续控制轮和臂时可用 `MHS.open_uno` 复用一次连接，保持回执与动作对应。[底盘动作与串口回执](move/README.md) · [共享串口调用示例](arm/README.md)
 
-### 5.2 两台 MG995 的中位、方向和行程
+**验证避障。** 在四轮架空、四向均有回波时，用平板将前方距离降到 300 mm 以内。向前应收到 `ERR OBSTACLE FRONT …`，后方畅通时可后退。再将平板移远、给一个新的短时前进命令，运行中把平板靠近前方，观察四轮主动停车。探头离线或读数过期会得到 `ERR SONAR 方向`，移开障碍后不会自动恢复原动作。初始阈值为 300 mm，落地前依据实测反应与制动距离调整。[四向判定与调试步骤](move/README.md)
 
-用 `nano "$CFG/arm.json"` 保存下面的首次点动配置。软件按图纸使用 152 mm 和 212 mm 臂长，肩角限位 ±85°、肘角限位 ±135°。默认换算比例来自项目的 270° 舵机假设，固件允许 500–2500 µs。先查实物规格并确认中位，下面的示例将首次点动限制在 1500 µs 两侧各 50 µs，足够执行本节的小角度测试。
+### 5.2 两台 MG995 的机械止挡与标定
 
-~~~json
-{
-  "shoulder": {"zero_us": 1500, "us_per_degree": 7.4074, "min_us": 1450, "max_us": 1550},
-  "elbow": {"zero_us": 1500, "us_per_degree": 7.4074, "min_us": 1450, "max_us": 1550}
-}
-~~~
+每轴只能从最大轴位退回 90°，软件默认在两端各留 3°。肩部实物照片记录了机械止挡姿态，斜拍图不能确定控制脉宽。肘部单独标定。按机械臂文档中的步骤，测出两轴的几何角、退回方向和行程内两个已知脉宽点，将标定存为 `$CFG/arm.json`。当关节在止挡处卡住时，先支撑臂、断开舵机电源并卸载，避免强扳或通电顶住机构。[标定表、测量方法与计算公式](arm/README.md)
 
-先预览中位，应出现 `ARM 1500 1500`。固定舵机并先卸下舵盘或脱开连杆，在无负载状态下给舵机供电，运行第二行，使两个轴到达电气中位。支撑机械臂，断开舵机电源后按零姿态安装舵盘。恢复供电，分别做第三、四行的小角度点动。
+在要烧录的那份 `Agents` 源码中执行下面的命令。第一条用实测数据检查两关节能否到达 4 号格。第二条导出 Uno 独立执行的脉宽上下界。然后按第 4 节重新编译并上传，拔下烧录线，再通过蓝牙调试。改变舵盘安装位置或脉宽标定时需要重新导出、烧录。
 
 ~~~bash
-python -m arm --joints 0 0 --config "$CFG/arm.json" --dry-run
-python -m arm --joints 0 0 --config "$CFG/arm.json" --port "$UNO_PORT"
-python -m arm --joints 5 0 --config "$CFG/arm.json" --port "$UNO_PORT"
-python -m arm --joints 0 5 --config "$CFG/arm.json" --port "$UNO_PORT"
+python -m arm --config "$CFG/arm.json" --cell 4 --dry-run
+python -m arm --config "$CFG/arm.json" --export-limits move/arm_limits.h
 ~~~
 
-肩零位朝机械臂框架 +X，肘零位是两杆伸直，俯视逆时针为正。调 `zero_us` 对齐零位，按实测“脉宽变化 / 角度变化”设置各自的 `us_per_degree`，转向相反时取负号。随后逐步测量两端可用行程，把每个关节已验证的最小、最大脉宽写入 `min_us`、`max_us`。首次点动的窄范围会拦住整格运动。完成标定后，在图纸所示对齐工位可先预览 `python -m arm --cell 4 --config "$CFG/arm.json" --dry-run`，确认后将 `--dry-run` 换成 `--port "$UNO_PORT"`。`OK ARM` 表示 Uno 已接收脉宽，末端是否触达格心用下一节的视觉测量判定。[机械臂几何和标定](arm/README.md)
+首次点动选择刚测得、远离端点的角度，先预览，再运行。旧配置缺少 `angle_at_max_deg` 时需补全，默认固件对 `ARM` 返回 `ERR ARM CALIBRATION`。格心不可达时，重新选择停靠位。`OK ARM` 仅表示两路脉宽已设置，实际到位用第 6 节的相机确认。
+
+~~~bash
+read -r -p "实测肩角和肘角（度，以空格分隔） " Q1 Q2
+python -m arm --joints "$Q1" "$Q2" --config "$CFG/arm.json" --dry-run
+python -m arm --joints "$Q1" "$Q2" --config "$CFG/arm.json" --port "$UNO_PORT"
+~~~
 
 ## 6. 一台随车相机完成两种定位
 
@@ -361,7 +365,7 @@ print(listen())'
 
 ## 9. 下次开机与故障定位
 
-本版在开发机上通过了第 2 节的 14 项单元测试和 Uno AVR 固件编译。仓库示例图可验证四个棋盘角标及标定文件的传递，实际转向、供电稳定性与格心误差需在实车上验收。
+本版在开发机上通过了第 2 节的模块测试、四向 SR09 虚拟总线测试和 Uno AVR 固件编译。仓库示例图可验证四个棋盘角标及标定文件的传递，实际转向、供电稳定性与格心误差需在实车上验收。
 
 重新登录后，先恢复工作目录、虚拟环境和实机设备配置。相机支架、棋盘和舵机安装未变时可沿用标定文件。每次启动 IMU 都需要新的静止校准。
 
@@ -378,8 +382,9 @@ python -m move stop --port "$UNO_PORT"
 | --- | --- |
 | `No module named move`、`serial` 或缺少 `ArucoDetector` | `pwd` 应为项目的 `Agents`，`which python` 应在虚拟环境内。运行第 2 节的安装与导入检查。用 `python -m pip list` 检查 OpenCV。同一环境只留一种提供 `cv2` 的发行包 |
 | Uno 或 IMU 报权限不足、串口正忙 | 用 `id -nG`、`ls -lL "$UNO_PORT" "$IMU_PORT"` 检查 `dialout` 权限。重新登录使组生效。关闭 IDE 监视器、厂商上位机或此前仍在运行的进程 |
-| Uno 没有确认停车，或上传时找不到板 | 逐一插拔确认数据线、端口和 `arduino:avr:uno` 板型。关闭串口占用程序，确认上传的是完整 `move` 草图。若有 `OK STOP` 但轮子不动，查底盘电源和对应 M 插座 |
-| 舵机一动就复位、抖动或方向错误 | 支撑臂后断开舵机负载电源，检查稳压电源带载能力、共地和 `S` 针，再无负载检查 `zero_us` 与斜率符号。卡到机械限位时缩小允许脉宽 |
+| 蓝牙运行端口没有停车回执，或 USB 上传失败 | 运行时查蓝牙端点、Uno 独立供电和 9600 波特协议。上传时另查 `FLASH_PORT`、板型及串口占用。避免把 `UNO_PORT` 当作 USB 烧录口 |
+| `ERR OBSTACLE` 或 `ERR SONAR` | 前者包含方向、毫米值，确认障碍和阈值。后者查对应方向是否预热、探头标签、4P 线序与供电，运行 `move.sonar scan` 和 `read --watch`，用平板验证回波 |
+| 舵机拒绝动作、抖动或卡住 | `ERR ARM CALIBRATION` 表示固件还缺实测限位头。`ERR ARM` 检查两轴是否与同次标定匹配。支撑臂、断开负载检查机构，再查稳压电源、共地、旋向和端点余量 |
 | 相机打不开、分辨率报错 | 关闭其余取流进程，重跑第 3 节的实际读帧测试。选有采集格式的 `/dev/videoN`，在 `--source` 传数字 `N`，用支持的尺寸更新标定 |
 | `measurement: null`、`arm: null` 或 `pose: null` | 末端测量检查角标数量、末端标签家族/ID、焦距和遮挡。车体位姿检查固定参照是否入镜及 `vehicle.json`、`--field` 是否匹配。位置有固定偏差时复核打印比例、指尖偏移、镜头和标签高度 |
 | IMU 三秒无有效数据、静止校准失败或位移漂移 | 核对 IMU 独立端口和 115200 波特，厂商输出须同时有原始传感器帧 `0x04` 与姿态帧 `0x16`（四元数）或 `0x26`（欧拉角）。车辆静止重启，核对安装角与初始点，再检查是否接受了视觉校正 |

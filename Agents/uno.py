@@ -7,6 +7,10 @@ DEFAULT_PORT = "/dev/ttyACM0"
 BAUD_RATE = 9600
 
 
+class MotionBlocked(OSError):
+    """Uno 已因方向净空不足或测距缺失而保持停车。"""
+
+
 def stop_wheels(link):
     # 首次打开 USB 可能触发 Uno 复位。停车握手也兼容原底盘固件。
     deadline = monotonic() + 4
@@ -17,12 +21,14 @@ def stop_wheels(link):
     raise TimeoutError("Uno 未确认停车，请检查串口名称、波特率和固件")
 
 
-def wait_reply(link, expected: bytes, seconds: float = 1):
+def wait_reply(link, expected: bytes, seconds: float = 1, *, fields=False):
     deadline = monotonic() + seconds
     while monotonic() < deadline:
         reply = link.readline().strip()
-        if reply == expected:
-            return
+        if reply == expected or (fields and reply.startswith(expected + b" ")):
+            return reply if fields else None
+        if reply.startswith((b"ERR OBSTACLE ", b"ERR SONAR ")):
+            raise MotionBlocked(reply.decode("ascii", errors="replace"))
         if reply and reply != b"OK STOP":
             raise OSError(f"Uno 返回 {reply!r}，期望 {expected!r}")
     raise TimeoutError(f"等待 Uno 回执 {expected!r} 超时")
