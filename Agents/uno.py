@@ -11,6 +11,9 @@ from time import monotonic
 DEFAULT_PORT = os.environ.get("UNO_PORT", "/dev/rfcomm0")
 # 须与 HC-05 的 UART 波特率一致。模块出厂为 9600，改过则用 AT+UART=9600,0,0 改回。
 BAUD_RATE = 9600
+# 打开 /dev/rfcomm0 只是登记节点，RFCOMM 链路真正连通还要 2–4 秒，期间写入会丢失。
+# 握手窗口要覆盖这段建链时间，实车实测约 3.7 秒，留足余量。
+HANDSHAKE_SECONDS = 15
 
 
 class MotionBlocked(OSError):
@@ -19,7 +22,7 @@ class MotionBlocked(OSError):
 
 def stop_wheels(link):
     # 蓝牙链路刚建立时开头几个字节可能丢失，持续重发直到 Uno 确认停车。
-    deadline = monotonic() + 4
+    deadline = monotonic() + HANDSHAKE_SECONDS
     while monotonic() < deadline:
         link.write(b"STOP\n")
         if link.readline().strip() == b"OK STOP":
