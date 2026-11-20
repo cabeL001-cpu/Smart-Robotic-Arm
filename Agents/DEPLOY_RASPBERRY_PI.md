@@ -1,31 +1,31 @@
 # 银立方机器人 · 树莓派部署指南
 
-树莓派运行 Python，实车用蓝牙与独立供电的 Arduino Uno 交换命令。Uno 一份固件负责四向 SR09 避障、四轮和两台 MG995。车上只有一台距地约 1.5 m 的下视摄像头，供机械臂与车体定位共用。YbImu 通过自己的 USB 串口把数据送到树莓派。
+树莓派运行 Python，通过板载蓝牙与扩展板上的 HC-05 交换命令，树莓派侧绑定为 `/dev/rfcomm0`。经典 Arduino Uno 运行一份同时驱动四向 SR09 避障、四轮和两台 MG995 的固件。车上只有一台距地约 1.5 m 的下视摄像头，供机械臂与车体定位共用。YbImu 通过自己的 USB 串口把数据送到树莓派。
 
-首次装机按第 1–7 节进行。**只验收四轮**时，第 2 节只装 `move/requirements.txt` 并运行底盘预览，第 3 节只识别 `UNO_PORT`，随后烧录第 4 节的完整草图，按第 5.1 节验证四个 SR09 后点动。只部署语音时，先完成第 2 节的代码复制和虚拟环境创建，再转到第 8 节。实物的串口名、电源规格、轮序、舵机行程和相机标定值需要现场核对。
+首次装机按第 1–7 节进行。**只验收四轮**时，第 2 节只装 `move/requirements.txt` 并运行底盘预览，第 3 节配对蓝牙并确认 `UNO_PORT`，随后烧录第 4 节的完整草图，按第 5.1 节验证四个 SR09 后点动。只部署语音时，先完成第 2 节的代码复制和虚拟环境创建，再转到第 8 节。实物的串口名、电源规格、轮序、舵机行程和相机标定值需要现场核对。
 
 ## 1. 断电接线
 
-准备树莓派及适配该型号的电源和系统盘、Uno R3（ATmega328P）及项目扩展板、四个直流减速电机、两台 MG995、下视摄像头、YbImu、四个 SR09 及一块五口 IIC 扩展板、对应 4P 线、蓝牙模块、烧录及 IMU 所需的 USB 数据线，以及车载主控电源、底盘电源和舵机稳压电源。语音另需麦克风与扬声器，可复用摄像头自带的麦克风。
+准备树莓派及适配该型号的电源和系统盘、不含无线模块的经典 Uno R3（ATmega328P）及项目扩展板、四个直流减速电机、两台 MG995、下视摄像头、YbImu、四个 SR09 及一块五口 IIC 扩展板、对应 4P 线、HC-05 蓝牙模块、烧录及 IMU 所需的 USB 数据线，以及车载主控电源、底盘电源和舵机稳压电源。语音另需麦克风与扬声器，可复用摄像头自带的麦克风。
 
 | 从哪里接 | 接到哪里 | 接线依据 |
 | --- | --- | --- |
-| 树莓派蓝牙 | 车载蓝牙模块与 Uno 的控制端 | 由通信模块负责人提供已就绪的字节流或虚拟串口。固件仍使用 9600 波特、8N1、换行结尾的 ASCII 指令 |
+| 树莓派板载蓝牙 | 扩展板蓝牙座上的 HC-05 | 无线传底盘和机械臂命令，不占 USB。模块已配置为从模式，名称 `sjtu006`（本批次 `sjtu001`–`sjtu015`），密码 `1234`；树莓派侧绑定为 `/dev/rfcomm0`，固件仍使用 `9600` 波特、8N1、换行结尾的 ASCII 指令 |
 | Uno 主控 `G、V、A4、A5` | 五口 IIC 扩展板的 `GND、VCC、SDA、SCL` | 一个端子接主控，另四个端子各接一组 SR09。按 GND 丝印和端子方向核对线序 |
 | 前、后、左、右 SR09 | IIC 扩展板任意四个空口 | 以车体为准，前 `0x69`、后 `0x72`、左 `0x6C`、右 `0x6A`。插口并联，不需改址 |
-| 树莓派 USB 口 | YbImu 的 USB 数据口 | 独立串口，`115200` 波特、8N1。将 IMU 刚性固定在底盘，记录其 +X 相对车头的方向 |
+| 树莓派另一 USB 口 | YbImu 的 USB 数据口 | 独立串口，`115200` 波特、8N1。将 IMU 刚性固定在底盘，记录其 +X 相对车头的方向 |
 | 树莓派 USB 主机口 | 随车下视 USB 摄像头 | 本文按 Linux 可读的 V4L2 摄像头部署。支架固定在车上，镜头朝地，棋盘固定在场地上 |
 | 电机 1、2、3、4 的两根线 | 扩展板 `M1`、`M2`、`M3`、`M4` 电机座 | 对应的 Uno **方向 / PWM** 分别为 **D2 / D3、D4 / D5、D8 / D6、D12 / D11**。沿用原调参轮序，用单轮点动记录实际车轮位置 |
 | 肩部 MG995 信号线 | 扩展板舵机接口 **D13 的 S** | 肩部指靠车体的基座关节 |
 | 肘部 MG995 信号线 | Uno 数字排针 **D10**（丝印 `10` 或 `~10`） | 肘部是连接两段臂的关节。扩展板的绿色 `VOUT` 也由 D10 控制，使用舵机期间保持该功率端子空载 |
 | 两台 MG995 的电源正线、地线 | 外接舵机稳压电源的 `+`、`−` | 再将该电源 `−` 接 Uno `GND`，让舵机信号共地。用分线接头将正线单独引到外部电源，避免把两个电源的正极并在一起 |
-| 底盘电池或匹配的电源 | 扩展板主电源输入 **VIN1**，按实物 `+ / −` | 按扩展板和电机实际额定值选电压，图示 VIN1 上限为 12 V。树莓派用自己的电源。实车运行时拔除树莓派与 Uno 间的 USB，Uno 逻辑、驱动和舵机由车载供电系统承担 |
+| 底盘电池或匹配的电源 | 扩展板主电源输入 **VIN1**，按实物 `+ / −` | 按扩展板和电机实际额定值选电压，图示 VIN1 上限为 12 V。VIN1 同时给 Uno 提供逻辑供电，树莓派用自己的电源。实车运行时拔除树莓派与 Uno 间的 USB，Uno 逻辑、驱动和舵机由车载供电系统承担 |
 
-先对准 Uno 与扩展板排针，再按丝印识别端子和舵机三根线。MG995 不同批次的线色和行程可能有差异。外置稳压电源应覆盖两台舵机同时动作的峰值电流。底盘电机和舵机的负载电流都走各自供电线路。四个探头共用 Uno 的 IIC 总线。蓝牙只传数据，负载电压和电流仍由车载电源决定。[扩展板接口实物图](image-8.png) · [Uno 固件引脚](move/arm_control.ino) · [Raspberry Pi 各型号电源要求](https://www.raspberrypi.com/documentation/computers/getting-started.html)
+先对准 Uno 与扩展板排针，再按丝印识别端子和舵机三根线。MG995 不同批次的线色和行程可能有差异。外置稳压电源应覆盖两台舵机同时动作的峰值电流。底盘电机和舵机的负载电流都走各自供电线路。四个探头共用 Uno 的 IIC 总线。蓝牙只传数据，负载电压和电流仍由车载电源决定。上述接法无需占用树莓派的 40 针 GPIO。[扩展板接口实物图](image-8.png) · [Uno 固件引脚](move/arm_control.ino) · [Raspberry Pi 各型号电源要求](https://www.raspberrypi.com/documentation/computers/getting-started.html)
 
 首次通电时将车轮架空，支撑机械臂并留出摆动空间。先保持电机和舵机的负载电源关闭，只接通树莓派与 Uno 逻辑电源。完成第 4 节烧录和第 5.1 节的停车握手后，再分路接通负载做点动测试。
 
-板载 USB 留给烧录和负载断电的台架诊断。若蓝牙模块与上传程序共用 Uno 的硬件串口，烧录时按接线方案隔离占用，再恢复运行接线。带载前检查轮子起动和舵机动作时的实际电压。
+**HC-05 接法。** 模块直接插在扩展板标注 `5V GND RX TX` 的蓝牙座上，该座与 Uno 的硬件串口 D0/D1 相连，所以固件仍然使用 `Serial`，`move/move.ino` 一行都不用改。板载 USB 留给烧录和负载断电的台架诊断；正因为和板载 USB 串口芯片共用 D0/D1，**烧录和用 USB 串口监视时必须把 HC-05 从座上拔下**，运行时也不要插 USB 数据线，否则两路会抢同一条串口。模块按出厂默认 9600 波特工作；若曾用 AT 命令改过，用 `AT+UART=9600,0,0` 改回。带载前检查轮子起动和舵机动作时的实际电压。
 
 ## 2. 准备树莓派系统和代码
 
@@ -38,7 +38,7 @@ cat /etc/os-release
 dpkg --print-architecture
 python3 --version
 sudo apt update
-sudo apt install -y git curl python3-venv python3-pip usbutils v4l-utils libgl1 libgomp1
+sudo apt install -y git curl python3-venv python3-pip usbutils v4l-utils libgl1 libgomp1 bluez
 sudo usermod -aG dialout,video "$USER"
 ~~~
 
@@ -100,9 +100,71 @@ python -m vision.arm --source image-7.png --cell 4
 
 底盘预览输出 `GO 250`，超声波帮助列出 `scan` 与 `read`，单元测试应以 `OK` 结束。最后一条读取仓库中的棋盘示例图，图中没有末端标签，预期 `measurement` 为 `null`、`arrived` 为 `false`。机械臂的动作预览需要第 5.2 节的关节标定。
 
-## 3. 辨认 Uno、IMU 和摄像头
+## 3. 配对蓝牙、辨认 IMU 和摄像头
 
-运行时从蓝牙负责人处取得 Uno 控制端点。下列 CLI 适用于对方已提供虚拟串口的方案，例如 `/dev/rfcomm0`。若交付的是 Python 字节流对象，调用方可向 `MHS.move`、`MHS.arm` 传入已握手的 `link`，并用 `move.sonar.read(link)` 查询。下面的 USB 枚举用于 IMU、摄像头和临时烧录设备。
+### 3.1 配对 HC-05 并绑定串口
+
+先确认树莓派的蓝牙已启用。HC-05 上电后指示灯快闪，表示处于可配对状态。
+
+~~~bash
+sudo systemctl enable --now bluetooth
+rfkill unblock bluetooth 2>/dev/null || true
+bluetoothctl
+~~~
+
+在 `bluetoothctl` 的交互提示符中依次执行。`scan on` 后等待 `sjtu006` 出现在列表里，记下它前面的 MAC 地址（本批次的名称是 `sjtu001` 到 `sjtu015`，以模块上的编号为准）。
+
+~~~text
+power on
+agent on
+scan on
+pair <MAC>        # 提示输入密码时填 1234
+trust <MAC>
+scan off
+exit
+~~~
+
+配对成功后把模块绑定成串口设备。仓库里的 `bt_link.sh` 会按名字自动查 MAC，先释放旧绑定再重新绑定；也可以手写 MAC。
+
+~~~bash
+cd "$HOME/Smart-Robotic-Arm/Agents"
+sh bt_link.sh bind sjtu006         # 等价于 sudo rfcomm bind rfcomm0 <MAC> 1
+ls -l /dev/rfcomm0
+
+sh bt_link.sh status               # 查看绑定
+sh bt_link.sh release              # 需要断开时释放
+~~~
+
+日常使用时不需要手动连接：`move`、`arm`、`vision` 每次运行都会在打开端口时自动建立蓝牙连接，程序退出后链路自动断开，模块指示灯回到快闪。**空闲时快闪是正常状态**，不要用灯色判断链路好坏，以 `python -m move stop` 是否打印「Uno 已确认停车。」为准。
+
+树莓派每次重启或 HC-05 断电重连后，`/dev/rfcomm0` 都会消失，需要重新 bind。要开机自动绑定，可新建 `/etc/systemd/system/rfcomm.service`，把 MAC 换成实际地址（本车 `sjtu006` = `00:21:04:32:B4:02`），然后启用它。
+
+~~~ini
+[Unit]
+Description=Bind HC-05 to /dev/rfcomm0
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/bin/rfcomm release rfcomm0
+ExecStart=/usr/bin/rfcomm bind rfcomm0 00:21:04:32:B4:02 1
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+~~~
+
+~~~bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now rfcomm.service
+~~~
+
+分步验收、失败处置和记录表见 [HC-05 蓝牙链路配置与验收工作流](BLUETOOTH_WORKFLOW.md)。
+
+### 3.2 辨认 IMU 和摄像头
+
+HC-05 不占用 USB，剩下的 USB 设备只有 YbImu 和摄像头。列出设备，对照描述和 USB 物理位置贴标签。插入摄像头后用 V4L2 找到它实际输出图像的节点。
 
 ~~~bash
 lsusb
@@ -111,15 +173,15 @@ ls -l /dev/serial/by-id /dev/serial/by-path
 v4l2-ctl --list-devices
 ~~~
 
-把下面三行存入 `$CFG/devices.env`，将示例值改为实际设备。`UNO_PORT` 是运行用蓝牙端点，`IMU_PORT` 是 IMU 的 USB 串口，可取唯一的 `/dev/serial/by-id/...`。`CAM` 是 OpenCV 的数字设备号。
+把以下三行存入树莓派上的 `$CFG/devices.env`（例如用 `nano "$CFG/devices.env"`）。`UNO_PORT` 固定填蓝牙串口；**IMU 的示例值要换成刚查到的设备**，优先使用实机存在且唯一的 `/dev/serial/by-id/...` 链接。同型号 USB 芯片的标识重复时，可选 `by-path` 并固定 USB 插口。`CAM` 填数字，`/dev/video2` 对应 `2`。
 
 ~~~bash
-export UNO_PORT=/dev/rfcomm0  # 仅当蓝牙负责人提供此设备节点
+export UNO_PORT=/dev/rfcomm0
 export IMU_PORT=/dev/ttyUSB0
 export CAM=0
 ~~~
 
-加载设置，确认打印出的两个串口真实路径互不相同，摄像头列出视频采集格式，再读一帧验证取流。
+加载设置，确认蓝牙串口存在、IMU 端口可用，摄像头列出视频采集格式，再读一帧验证取流。
 
 ~~~bash
 source "$CFG/devices.env"
@@ -143,9 +205,11 @@ PY
 
 `move/move.ino` 是入口，`move_func.ino` 保留轮控参数，`sonar.cpp`、`sonar.h` 负责四向避障，`arm_control.ino` 和 `arm_limits.h` 执行两轴脉宽限位。编译整个 `move` 目录。已完成第 5.2 节标定时先导出限位头文件，否则默认固件仅锁定舵机，仍可验收避障。烧录时四轮架空、负载电源关闭。
 
-**用电脑上的 Arduino IDE。** 打开 `Agents/move/move.ino`，安装支持 `Wire.setWireTimeout` 的 Arduino AVR Boards（已测试 1.8.8）及 Servo 库，选择 **Arduino Uno** 与烧录用 USB 的实际 COM 口。验证并上传完整草图，关闭串口监视器、拔除烧录线，给 Uno 独立供电后使用蓝牙控制端点。[Arduino Uno R3 板卡资料](https://docs.arduino.cc/hardware/uno-rev3/)
+**烧录前必须把 HC-05 从扩展板蓝牙座上拔下**（或断开模块的 5V），因为板载 USB 串口芯片和 HC-05 共用 D0/D1，同时在线会互相干扰。烧录完成、拔掉 USB 后，再把模块插回。
 
-**也可在树莓派用 Arduino CLI。** 以下命令用 Arduino 官方安装脚本按系统架构下载 CLI，安装到当前用户的 `~/.local/bin`。已有 CLI 时可从 `arduino-cli version` 开始。编译结果写入临时目录，上传时使用同一目录。临时将 Uno 用 USB 接到编译机，`FLASH_PORT` 专指这次 USB 烧录端口。上传完成后拔线，运行时继续用 `UNO_PORT`。[CLI 安装](https://docs.arduino.cc/arduino-cli/installation/) · [官方安装脚本](https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh) · [CLI 编译与上传](https://docs.arduino.cc/arduino-cli/getting-started/)
+**用电脑上的 Arduino IDE。** 打开 `Agents/move/move.ino`，确认同一草图中有上述三个文件。安装支持 `Wire.setWireTimeout` 的 **Arduino AVR Boards**（已测试 1.8.8）和 Arduino 的 **Servo** 库，选择 **Arduino Uno** 与烧录用 USB 的实际 COM 口。先“验证”再“上传”完整草图，看到上传成功后关闭串口监视器、拔除烧录线，把 HC-05 插回蓝牙座，再在树莓派上运行 `sh bt_link.sh bind` 恢复 `/dev/rfcomm0`。[Arduino Uno R3 板卡资料](https://docs.arduino.cc/hardware/uno-rev3/)
+
+**也可在树莓派用 Arduino CLI。** 以下命令用 Arduino 官方安装脚本按系统架构下载 CLI，安装到当前用户的 `~/.local/bin`。已有 CLI 时可从 `arduino-cli version` 开始。编译结果写入临时目录，上传时使用同一目录。烧录期间 Uno 仍要接 USB、HC-05 要拔下，所以上传端口用 `FLASH_PORT`（这次 USB 烧录口），**不能用 `$UNO_PORT` 的蓝牙地址**；`move` 指当前 `Agents` 目录下的草图。上传完成后拔线，运行时继续用 `UNO_PORT`。[CLI 安装](https://docs.arduino.cc/arduino-cli/installation/) · [官方安装脚本](https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh) · [CLI 编译与上传](https://docs.arduino.cc/arduino-cli/getting-started/)
 
 ~~~bash
 mkdir -p "$HOME/.local/bin"
@@ -187,7 +251,7 @@ python -m move m4 --ms 200 --port "$UNO_PORT"
 
 3. 四路独立点动通过后，架空运行 `python -m move go --ms 250 --port "$UNO_PORT"`，应四轮同时动作、到时停止。再放到平整空地，短时验证 `go`、`left`、`rotate-left` 的实车方向。若单轮转向错误，先断开驱动电源，再核对轮位及电机两线极性。
 
-每次定时动作由 Uno 自行计时。运行中的底盘命令可按 **Ctrl+C** 提前请求停车。`STOP` 控制四轮，舵机在收到关节命令后会继续保持输出。同一时刻只让一个进程占用 Uno 串口，连续控制轮和臂时可用 `MHS.open_uno` 复用一次连接，保持回执与动作对应。[底盘动作与串口回执](move/README.md) · [共享串口调用示例](arm/README.md)
+每次定时动作由 Uno 自行计时。运行中的底盘命令可按 **Ctrl+C** 提前请求停车。`STOP` 控制四轮，舵机在收到关节命令后会继续保持输出。同一时刻只让一个进程占用 Uno 串口，连续控制轮和臂时可用 `MHS.open_uno` 复用一次连接，省去每次重建链路和握手，保持回执与动作对应。蓝牙链路打开时不会复位 Uno；只有走 USB 台架调试时打开串口才可能触发复位。[底盘动作与串口回执](move/README.md) · [共享串口调用示例](arm/README.md)
 
 **验证避障。** 在四轮架空、四向均有回波时，用平板将前方距离降到 300 mm 以内。向前应收到 `ERR OBSTACLE FRONT …`，后方畅通时可后退。再将平板移远、给一个新的短时前进命令，运行中把平板靠近前方，观察四轮主动停车。探头离线或读数过期会得到 `ERR SONAR 方向`，移开障碍后不会自动恢复原动作。初始阈值为 300 mm，落地前依据实测反应与制动距离调整。[四向判定与调试步骤](move/README.md)
 
@@ -375,16 +439,20 @@ source "$HOME/.venvs/smart-robotic-arm/bin/activate"
 CFG="$HOME/.config/smart-robotic-arm"
 DATA="$HOME/robot-data"
 source "$CFG/devices.env"
+sh bt_link.sh bind           # 重启或模块重连后要恢复 /dev/rfcomm0
 python -m move stop --port "$UNO_PORT"
 ~~~
 
 | 现场现象 | 按顺序检查 |
 | --- | --- |
 | `No module named move`、`serial` 或缺少 `ArucoDetector` | `pwd` 应为项目的 `Agents`，`which python` 应在虚拟环境内。运行第 2 节的安装与导入检查。用 `python -m pip list` 检查 OpenCV。同一环境只留一种提供 `cv2` 的发行包 |
-| Uno 或 IMU 报权限不足、串口正忙 | 用 `id -nG`、`ls -lL "$UNO_PORT" "$IMU_PORT"` 检查 `dialout` 权限。重新登录使组生效。关闭 IDE 监视器、厂商上位机或此前仍在运行的进程 |
-| 蓝牙运行端口没有停车回执，或 USB 上传失败 | 运行时查蓝牙端点、Uno 独立供电和 9600 波特协议。上传时另查 `FLASH_PORT`、板型及串口占用。避免把 `UNO_PORT` 当作 USB 烧录口 |
+| `/dev/rfcomm0` 不存在 | 树莓派重启或 HC-05 掉电重连后绑定会失效。在 `Agents` 运行 `sh bt_link.sh bind` 重新绑定。蓝牙服务没起来时先 `sudo systemctl enable --now bluetooth`，用 `rfkill list` 确认没被软关闭 |
+| 扫描不到 `sjtu006`、配对失败 | 确认模块在可配对状态（指示灯快闪），没有别的设备已经连着它，树莓派与模块距离足够近。密码为 `1234`。用 `bluetoothctl devices` 核对名字和 MAC |
+| Uno 或 IMU 报权限不足、串口正忙 | 用 `id -nG`、`ls -lL "$UNO_PORT" "$IMU_PORT"` 检查 `dialout` 权限，重新登录使组生效。`/dev/rfcomm0` 由 root 创建，必要时 `sudo chown $USER /dev/rfcomm0`。同一时刻只让一个进程占用串口，关闭 IDE 监视器、minicom 或此前仍在运行的进程。HC-05 断电时打开节点可能先卡住约半分钟再报错，属于内核在等 RFCOMM 连接 |
+| 蓝牙链路时断时续、Uno 不确认停车 | 查模块供电（扩展板 5V 座）、距离和 2.4 GHz 干扰，重新 `sh bt_link.sh bind`。Uno 按本机时钟计时，链路中断时当前动作仍会到期自动停车，不会一直转 |
+| `Uno 未确认停车`，或 USB 上传失败、找不到板 | 运行时查蓝牙端点、Uno 独立供电和 9600 波特协议；打开蓝牙链路后开头几个字节可能丢失，重试即可。上传时另查 `FLASH_PORT`、数据线、`arduino:avr:uno` 板型和串口占用，烧录前确认 HC-05 已从蓝牙座拔下，避免把 `UNO_PORT` 当作 USB 烧录口。若有 `OK STOP` 但轮子不动，查底盘电源和对应 M 插座 |
 | `ERR OBSTACLE` 或 `ERR SONAR` | 前者包含方向、毫米值，确认障碍和阈值。后者查对应方向是否预热、探头标签、4P 线序与供电，运行 `move.sonar scan` 和 `read --watch`，用平板验证回波 |
-| 舵机拒绝动作、抖动或卡住 | `ERR ARM CALIBRATION` 表示固件还缺实测限位头。`ERR ARM` 检查两轴是否与同次标定匹配。支撑臂、断开负载检查机构，再查稳压电源、共地、旋向和端点余量 |
+| 舵机拒绝动作、抖动、一动就复位或卡住 | `ERR ARM CALIBRATION` 表示固件还缺实测限位头。`ERR ARM` 检查两轴是否与同次标定匹配。支撑臂、断开舵机负载电源后检查机构、稳压电源带载能力、共地和 `S` 针，再无负载检查 `zero_us` 与斜率符号；卡到机械限位时缩小允许脉宽 |
 | 相机打不开、分辨率报错 | 关闭其余取流进程，重跑第 3 节的实际读帧测试。选有采集格式的 `/dev/videoN`，在 `--source` 传数字 `N`，用支持的尺寸更新标定 |
 | `measurement: null`、`arm: null` 或 `pose: null` | 末端测量检查角标数量、末端标签家族/ID、焦距和遮挡。车体位姿检查固定参照是否入镜及 `vehicle.json`、`--field` 是否匹配。位置有固定偏差时复核打印比例、指尖偏移、镜头和标签高度 |
 | IMU 三秒无有效数据、静止校准失败或位移漂移 | 核对 IMU 独立端口和 115200 波特，厂商输出须同时有原始传感器帧 `0x04` 与姿态帧 `0x16`（四元数）或 `0x26`（欧拉角）。车辆静止重启，核对安装角与初始点，再检查是否接受了视觉校正 |

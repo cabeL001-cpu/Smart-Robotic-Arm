@@ -61,23 +61,24 @@ python -m unittest move.test_sonar
 ## 拿到硬件后运行
 
 1. 将四个车轮架空，沿用调好参数时的 M1 至 M4 接线，接好底盘驱动电源。各电机座和引脚标注见[扩展板图](../image-8.png)。
-2. 使用支持 `Wire.setWireTimeout` 的 Arduino AVR Boards（已测试 1.8.8）和 Servo 库，打开 `move/move.ino` 并编译完整草图。USB 用于烧录，上传成功后关闭串口监视器并断开 USB。
-3. 运行时树莓派与 Uno 走由另一位同学提供的蓝牙链路，Uno 和轮臂负载使用车载电源。字节协议仍为原来的 ASCII 行。
-4. 在树莓派的 `Agents` 目录安装 pySerial。已有项目虚拟环境时直接在其中运行安装命令。
+2. 使用支持 `Wire.setWireTimeout` 的 Arduino AVR Boards（已测试 1.8.8）和 Servo 库，打开 `move/move.ino` 并编译完整草图，同目录保留 `move_func.ino` 和 `arm_control.ino`。USB 用于烧录，上传成功后关闭串口监视器并断开 USB。
+3. 把已配好的 HC-05 插到扩展板标注 `5V GND RX TX` 的蓝牙座，该座接 Uno 硬件串口 D0/D1，固件无需改动，字节协议仍是原来的 ASCII 行。树莓派侧先按[部署指南第 3.1 节](../DEPLOY_RASPBERRY_PI.md)用 `bluetoothctl` 完成配对，再运行 `sh bt_link.sh bind` 得到 `/dev/rfcomm0`。板载 USB 口与蓝牙座共用 D0/D1，烧录时必须拔下模块，运行时不要插 USB 数据线。Uno 和轮臂负载使用车载电源。
+4. 在树莓派的 `Agents` 目录安装 pySerial。已有项目虚拟环境时直接在其中运行安装命令，否则按下列示例创建专用环境。`serial.tools.list_ports` 只列 USB 串口，不会显示蓝牙串口，用 `ls -l /dev/rfcomm0` 确认绑定。
 
 ```bash
 cd /path/to/Smart-Robotic-Arm/Agents
 python3 -m venv ~/move-venv
 source ~/move-venv/bin/activate
 python3 -m pip install -r move/requirements.txt
+ls -l /dev/rfcomm0
 ```
 
-5. 将 `UNO_PORT` 设置为蓝牙链路实际提供的串行设备。先停车握手，按上节检查四向测距，再短时点动。
+5. 下列命令默认使用 `UNO_PORT` 环境变量，未设置时用 `/dev/rfcomm0`。先确认停车通信，按上节检查四向测距，再短时点动一个电机，最后让四轮一起前进。
 
 ```bash
-python3 -m move stop --port "$UNO_PORT"
-python3 -m move m1 --ms 200 --port "$UNO_PORT"
-python3 -m move go --ms 250 --port "$UNO_PORT"
+python3 -m move stop
+python3 -m move m1 --ms 200
+python3 -m move go --ms 250
 ```
 
 运行 `go` 时，四路电机应同时按标定的前进方向转动约 250 毫秒，随后全部停止。终端收到停车回执后打印「Uno 已确认停车」。依次将 `m1` 换成 `m2`、`m3`、`m4` 可核对每个电机座对应的实物车轮。将车轮落地后再确认车体实际行进方向。
@@ -95,7 +96,7 @@ python3 -m move go --ms 250 --port "$UNO_PORT"
 | `m1`、`m2`、`m3`、`m4` | 单独点动对应电机向前，其余三路保持停车 |
 | `stop` | 立即将四路输出置为停车状态 |
 
-`--ms` 接受 1 到 65535 的整数，默认 1000。实车显式传入蓝牙模块提供的端口。运动期间可在当前终端按 **Ctrl+C** 请求提前停车。控制程序独占串口，同一时间由一个进程发指令。
+`--ms` 接受 1 到 65535 的整数，默认 1000。省略 `--port` 时先读 `UNO_PORT` 环境变量，没有则用 `/dev/rfcomm0`。运动期间可在当前终端按 **Ctrl+C** 请求提前停车。控制程序独占串口，同一时间由一个进程发指令。
 
 ## Python 调用
 
@@ -105,7 +106,7 @@ python3 -m move go --ms 250 --port "$UNO_PORT"
 import os
 import MHS
 
-port = os.environ["UNO_PORT"]
+port = os.environ.get("UNO_PORT", "/dev/rfcomm0")
 MHS.move("go", 250, port=port)
 MHS.move("rotate-left", 150, port=port)
 MHS.move("stop", port=port)
@@ -124,7 +125,7 @@ MHS.move("stop", port=port)
 
 每路标定的正转输出为 `HIGH / 0`，反转为 `LOW / 255`，停车为 `LOW / 0`，顺序为方向脚、PWM 脚。各动作直接复用[原电机函数](move_func.ino)。
 
-串口使用 **9600 波特、8N1**。请求是大写 ASCII 文本，以 LF 结束，也接受 CRLF。串口示例中的单词 `GO` 可直接使用，默认运动 1000 毫秒。[串口示例图](../image-9.png)
+串口使用 **9600 波特、8N1**，这是 HC-05 的 UART 波特率，蓝牙链路两端一致。请求是大写 ASCII 文本，以 LF 结束，也接受 CRLF。串口示例中的单词 `GO` 可直接使用，默认运动 1000 毫秒。[串口示例图](../image-9.png)
 
 | 树莓派发送的一行 | Uno 的回执与动作 |
 | --- | --- |
@@ -136,9 +137,9 @@ MHS.move("stop", port=port)
 | 运动中收到另一条运动指令 | 回复 `ERR BUSY`，继续原动作直至到期或收到 `STOP` |
 | 无效动作、无效时长或超长行 | 分别回复 `ERR ACTION`、`ERR DURATION` 或 `ERR LINE` |
 
-树莓派在建立控制连接时用 `STOP` 握手。Uno 本地负责测距与运动计时，即使蓝牙中断，当前动作仍受避障和原定时长约束。
+树莓派在建立控制连接时用 `STOP` 握手。蓝牙链路刚建立时开头几个字节可能丢失，树莓派会在握手期间重发 `STOP`，收到确认后只发送一次运动指令；走 USB 台架调试时打开串口还可能使 Uno 复位。Uno 使用本机时钟计时并本地负责测距，通信中断后仍会在该次动作到期时停车，且当前动作始终受避障约束。
 
-若提示「Uno 未确认停车」，核对设备名、两端波特率、固件和收发线。若已收到停车回执但某个轮子没有转动，用单轮命令检查对应电机座、底盘供电和实际接线。
+若提示「Uno 未确认停车」，核对 `/dev/rfcomm0` 是否已绑定、两端波特率、固件和模块是否插在蓝牙座上。若已收到停车回执但某个轮子没有转动，用单轮命令检查对应电机座、底盘供电和实际接线。
 
 同一 Uno 同时提供关节控制。组合动作通过 `MHS.open_uno` 复用串口，打开时握手停车一次。[机械臂调用示例](../arm/README.md)
 

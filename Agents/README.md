@@ -1,12 +1,12 @@
 # 银立方机器人系统集成
 
-实车通过蓝牙把命令交给独立供电的 Uno，蓝牙传输由另一位同学负责。Uno 在本机轮询四个 SR09，驱动四轮及两台 MG995。在 `Agents` 目录导入 `MHS`。底盘正常回执表示已停车，舵机回执表示已设置关节输出。
+实车通过 HC-05 蓝牙把命令交给独立供电的 Uno（树莓派侧绑定为 `/dev/rfcomm0`）。Uno 在本机轮询四个 SR09，驱动四轮及两台 MG995。在 `Agents` 目录导入 `MHS`。组合动作使用 `MHS.open_uno` 复用串口，底盘回执表示已停车，舵机回执表示关节指令已接受。蓝牙链路的配置与逐项验收见 [BLUETOOTH_WORKFLOW.md](BLUETOOTH_WORKFLOW.md)。
 
 ```python
 import os
 import MHS
 
-MHS.move("go", 250, port=os.environ["UNO_PORT"])
+MHS.move("go", 250, port=os.environ.get("UNO_PORT", "/dev/rfcomm0"))
 ```
 
 | 模块 | 接口与集成状态 | 模块说明 |
