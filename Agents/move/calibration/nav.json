@@ -1,0 +1,14 @@
+{
+  "field": "field.json",
+  "front_mount": "front.json",
+  "start_field_pose": null,
+  "imu_mount_yaw_deg": 0,
+  "speeds": {"go": null, "back": null, "left": null, "right": null, "rotate-left": null, "rotate-right": null},
+  "control": {
+    "coarse_m": 0.18, "tolerance_m": 0.035,
+    "min_pulse_ms": 65, "max_pulse_ms": 350, "settle_s": 0.25,
+    "scan_step_deg": 18, "min_scan_tags": 2, "confirm_frames": 3,
+    "agreement_m": 0.12, "agreement_deg": 12,
+    "vision_timeout_s": 3, "timeout_s": 150, "stall_pulses": 6, "calibration_s": 2
+  }
+}

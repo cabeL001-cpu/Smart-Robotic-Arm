@@ -20,7 +20,12 @@ export FRONT_CAM=/dev/v4l/by-id/usb-_Webcam_C170-video-index0
 python3 -m vision.scan front --source "$FRONT_CAM" --frames 10
 ~~~
 
-可在两个终端同时运行。将围挡标签完整放在车头正前方，黑框四周留出白边。前摄输出场地家族（默认 36h11，可用 `--field` 配置）中 ID 1–4 的中心和四角像素；空数组表示本帧没有读出墙标。该输出用于识别，车体的米制位姿仍由 `vision.robot` 提供。前摄标定文件可单独用 `--config` 指定。
+可在两个终端同时运行。将围挡标签完整放在车头正前方，黑框四周留出白边。`vision.scan front` 输出场地家族和已配置 ID（默认 36h11 / 1–4）的中心和四角像素，空数组表示本帧没有读出墙标。前摄完成镜头、安装和墙标地图标定后，`vision.front` 会输出车心的米制位置和弧度航向，导航直接调用同一估计器。顶摄的 `vision.robot` 可独立测量。[前摄标定步骤](../move/CALIBRATION.md)
+
+~~~bash
+python -m vision.front --source "$FRONT_CAM" --config "$CFG/navigation/front.json" \
+  --field "$CFG/navigation/field.json" --frames 20
+~~~
 
 顶摄配置应与实机分辨率匹配，例如 `{"image_size":[1280,720]}`。令棋盘四角入镜。实物版输出 `printed5` 编号 0–3（左下、右下、左上、右上）。这四个编号是本项目按图案分配的位置编号。程序从候选四边形采样 5×5 码字，在四种旋转方向下校验黑边和编码；两角已知时会在预计邻域复核缺失码字。输出 `board_tags_used` 表示拟合实际使用的角标数。棋盘单独入镜即可验收四角；测量指尖还需同帧读到末端标签。实物版按图尺估算黑框约 15 mm，验收毫米误差前请实测黑框和棋盘外边长。
 

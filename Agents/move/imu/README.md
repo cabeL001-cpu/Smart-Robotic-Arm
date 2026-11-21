@@ -27,7 +27,7 @@ python3 -m vision.robot --source "$CAM" --config "$HOME/.config/smart-robotic-ar
 python3 -m move.imu --replay run-raw.csv --fixes poses.jsonl
 ~~~
 
-实时管道使用已标定下视相机的 `vision.robot` 输出，两端共用同一台树莓派的单调时钟。前摄 `vision.scan front` 输出的是墙标像素坐标。离线回放要使用同次录制、同一时基的位姿 JSON 行。在线程序也可调用 `Tracker.correct(t, x_m, y_m, yaw_rad)`，用返回值判断观测是否被采用。[位姿标定](../../vision/README.md) · [部署时的设备配置](../../DEPLOY_RASPBERRY_PI.md)
+实时管道可使用已标定顶摄 `vision.robot` 或前摄 `vision.front` 输出的米制位姿。两端共用同一台树莓派的单调时钟，离线回放使用同次录制、同一时基的位姿 JSON 行。在线程序可用 `Tracker.state_at(t)` 取得对应时刻的惯性状态，调用 `Tracker.correct(t,x_m,y_m,yaw_rad)` 校正，并检查是否被接受。自动导航在独立线程连续采样，停车后施加零速约束，利用未折返的累计航向确认整圈。[导航标定](../CALIBRATION.md) · [位姿观测](../../vision/README.md)
 
 ## 资料与可重复验证
 

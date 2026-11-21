@@ -5,13 +5,14 @@ import json
 
 from .board import fit_plane
 from .camera import Mount, frames
-from .field import Field, WALLS
+from .field import Field
 from .tags import Detector
 
 
 def inspect(tags, role, field):
     if role == "front":
-        tags = {k: q for k, q in tags.items() if k[0] == field.wall_family and k[1] in WALLS}
+        ids = field.wall_ids()
+        tags = {k: q for k, q in tags.items() if k[0] == field.wall_family and k[1] in ids}
     result = {"camera": role, "tags": [
         {"family": family, "id": ident, "center_px": corners.mean(axis=0).tolist(),
          "corners_px": corners.tolist()} for (family, ident), corners in sorted(tags.items())

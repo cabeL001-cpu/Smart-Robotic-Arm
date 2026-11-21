@@ -26,6 +26,8 @@ class Mount:
 
     robot_center_px: tuple = ()     # 车体中心的地面投影像素
     robot_forward_px: tuple = ()    # 前方第二个地面点的像素
+    front_xyz_mm: tuple = ()        # 前摄光心相对车心地面投影，轴为前、左、上
+    front_ypr_deg: tuple = ()       # 前摄安装偏航、仰角、滚转
 
     @classmethod
     def load(cls, path=None):
@@ -67,6 +69,7 @@ def frames(source, mount):
         if not capture.isOpened():
             raise OSError(f"无法打开相机或录像 {source}")
         if live and sys.platform.startswith("linux"):
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             # 两路 USB 摄像头共享总线时优先请求压缩帧；驱动可保留自己的默认格式。
             capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         if live and mount.image_size:

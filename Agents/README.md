@@ -19,11 +19,12 @@ python -m move.sonar read
 
 | 模块 | 入口与输出 | 说明 |
 | --- | --- | --- |
+| 坐标导航 | `MHS.open_navigation` 在一次启动零点下依次执行 `nav.go_to_dock("A")` 或 `nav.go_to(x_m,y_m)`。IMU 粗定位、前摄整圈扫描和视觉微调共用 Uno 四向锁停 | [小车标定与运行](move/CALIBRATION.md) · [接口与参数](API.md) |
 | 四轮与避障 | `MHS.move(action, duration_ms)` 请求定时动作，Uno 按方向检查 SR09，到时停车或报告受阻。`python -m move.go_one_second` 会实际请求前进一秒 | [接线、点动与一秒测试](move/README.md) |
 | 机械臂 | `MHS.arm(cell, config=cfg)` 规划肩、肘两轴。肩接 D13，肘接 D10，先用实测参数导出 Uno 限位 | [行程标定与验收](arm/README.md) |
-| 视觉 | `vision.scan top` 检查棋盘；`vision.arm` 测末端误差；`vision.robot` 输出车体位姿；`vision.align` 通过 Uno 驱动关节。配有前摄时，`vision.scan front` 输出墙标 1–4 的像素坐标 | [相机设置与示例](vision/README.md) |
+| 视觉 | 顶摄 `vision.arm`、`vision.robot`、`vision.align` 分别测末端、测车心和闭环到格。前摄 `vision.scan front` 读墙标像素，`vision.front` 由地图和内外参输出米制车心 | [相机设置与示例](vision/README.md) · [机械臂标定](arm/CALIBRATION.md) |
 | IMU | `python -m move.imu` 输出平面位置与航向；`--vision-stdin` 可接收同机 `vision.robot` 的位姿修正 | [采样、记录与回放](move/imu/README.md) |
-| 语音 | `listen_speak.listen()` 返回格号和动作，`speak()`、`say_event()` 负责播报 | [语音接口与自测](listen_speak/README.md) |
+| 语音 | `MHS.listen()` 返回格号和动作，`MHS.say(text)` 播报文本，`listen_speak.say_event()` 播报预设事件 | [语音接口与自测](listen_speak/README.md) |
 
 ## 共用 Uno 连接
 
@@ -38,4 +39,4 @@ with MHS.open_uno() as link:
     print(read(link)["front"]["mm"])
 ```
 
-`OK ARM` 表示 Uno 已设置两路舵机输出，末端是否到达格心由视觉测量。语音目前可返回 `("4", "arrive")` 一类的格号指令，调用方负责选择动作并传入标定。A–D 停靠属于上层导航目标，现有底盘接口接受方向和时长。
+`OK ARM` 表示 Uno 已设置两路舵机输出，末端是否到达格心由顶摄测量。语音当前返回 `("4","arrive")` 等格号，`MHS.dispatch` 可将它交给已标定工位的机械臂。调用方也可直接传 `("A","arrive")` 和已打开的 `navigator`，启动字母点导航。若需在导航会话中操作手臂，使用 `nav.shared_link()` 或 `MHS.dispatch` 顺序复用连接。[调用和返回示例](API.md)

@@ -7,6 +7,32 @@ const uint16_t DEFAULT_DURATION_MS = 1000;
 uint32_t motionStartedAt;
 uint16_t motionDurationMs = 0;  // 0 表示四轮已停车
 uint8_t motionDirections = 0;
+enum NavigationMode { NAV_IDLE, NAV_ACTIVE, NAV_LOCKED };
+NavigationMode navigationMode = NAV_IDLE;
+uint8_t lockedDirection;
+uint16_t lockedMm;
+
+// 扫描、等待相机和运动中均轮询四面。保存首次阻挡的方向和距离，障碍消失也不解锁。
+void checkNavigationClearance() {
+  if (navigationMode != NAV_ACTIVE) return;
+  int8_t index = sonar::blockedDirection(sonar::ALL);
+  if (index < 0) return;
+  bool wasMoving = motionDurationMs != 0;
+  stop();
+  motionDurationMs = 0;
+  navigationMode = NAV_LOCKED;
+  lockedDirection = index;
+  lockedMm = sonar::distanceMm(index);
+  if (wasMoving) sonar::reportBlocked(lockedDirection, lockedMm);
+}
+
+bool navigationReady() {
+  checkNavigationClearance();
+  if (navigationMode == NAV_ACTIVE) return true;
+  if (navigationMode == NAV_LOCKED) sonar::reportBlocked(lockedDirection, lockedMm);
+  else Serial.println(F("ERR NAV INACTIVE"));
+  return false;
+}
 
 void setup() {
   initMotorPins();
@@ -36,10 +62,14 @@ void startMotion(const char *name, uint16_t durationMs) {
   };
   for (const auto &motion : motions) {
     if (strcmp(name, motion.name) == 0) {
-      int8_t blocker = blockedDirection(motion.directions);
-      if (blocker >= 0) {
-        reportBlocked(blocker);
-        return;
+      if (navigationMode == NAV_ACTIVE) {
+        if (!navigationReady()) return;
+      } else {
+        int8_t blocker = blockedDirection(motion.directions);
+        if (blocker >= 0) {
+          reportBlocked(blocker);
+          return;
+        }
       }
       motionDirections = motion.directions;
       motionStartedAt = millis();
@@ -63,19 +93,9 @@ uint16_t parseDuration(const char *digits) {
   return value;
 }
 
-void handleCommand(char *line) {
-  if (strcmp(line, "SONAR") == 0 || strncmp(line, "SONAR ", 6) == 0) {
-    sonar::handleCommand(line, motionDurationMs != 0);
-    return;
-  }
-  if (strncmp(line, "ARM ", 4) == 0) {
-    setArmPulses(line + 4);
-    return;
-  }
-  if (strcmp(line, "STOP") == 0) {
-    stop();
-    motionDurationMs = 0;
-    Serial.println(F("OK STOP"));
+void handleMotion(char *line) {
+  if (navigationMode == NAV_LOCKED) {
+    sonar::reportBlocked(lockedDirection, lockedMm);
     return;
   }
 
@@ -96,10 +116,56 @@ void handleCommand(char *line) {
   startMotion(line, durationMs);
 }
 
+void handleNavigation(char *request) {
+  if (strncmp(request, "MOVE ", 5) == 0) {
+    if (navigationMode == NAV_ACTIVE) handleMotion(request + 5);
+    else navigationReady();  // Uno 复位或已锁停时，拒绝带导航前缀的动作。
+    return;
+  }
+  if (motionDurationMs != 0) {
+    Serial.println(F("ERR BUSY"));
+    return;
+  }
+  if (strcmp(request, "RESET") == 0) {
+    int8_t blocker = sonar::blockedDirection(sonar::ALL);
+    if (blocker >= 0) sonar::reportBlocked(blocker);
+    else {
+      navigationMode = NAV_IDLE;
+      Serial.println(F("OK NAV RESET"));
+    }
+  } else if (strcmp(request, "BEGIN") == 0) {
+    if (navigationMode == NAV_IDLE) navigationMode = NAV_ACTIVE;
+    if (navigationReady()) Serial.println(F("OK NAV BEGIN"));
+  } else if (strcmp(request, "CHECK") == 0) {
+    if (navigationReady()) Serial.println(F("OK NAV CHECK"));
+  } else if (strcmp(request, "END") == 0) {
+    if (navigationMode == NAV_LOCKED) sonar::reportBlocked(lockedDirection, lockedMm);
+    else {
+      navigationMode = NAV_IDLE;
+      Serial.println(F("OK NAV END"));
+    }
+  } else Serial.println(F("ERR ACTION"));
+}
+
+void handleCommand(char *line) {
+  if (strcmp(line, "STOP") == 0) {
+    stop();
+    motionDurationMs = 0;
+    Serial.println(F("OK STOP"));
+  } else if (strncmp(line, "NAV ", 4) == 0) {
+    handleNavigation(line + 4);
+  } else if (strcmp(line, "SONAR") == 0 || strncmp(line, "SONAR ", 6) == 0) {
+    sonar::handleCommand(line, motionDurationMs != 0);
+  } else if (strncmp(line, "ARM ", 4) == 0) {
+    setArmPulses(line + 4);
+  } else handleMotion(line);
+}
+
 void loop() {
   sonar::poll();
+  checkNavigationClearance();
   if (motionDurationMs != 0) {
-    int8_t blocker = sonar::blockedDirection(motionDirections);
+    int8_t blocker = navigationMode == NAV_IDLE ? sonar::blockedDirection(motionDirections) : -1;
     if (blocker >= 0 || millis() - motionStartedAt >= motionDurationMs) {
       stop();
       motionDurationMs = 0;

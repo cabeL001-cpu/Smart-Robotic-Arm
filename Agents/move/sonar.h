@@ -9,6 +9,8 @@ constexpr uint16_t STOP_MM = 300;  // 初始值，按实测车速、轮询周期
 void begin();
 void poll();
 int8_t blockedDirection(uint8_t mask);   // -1 表示所需方向均可通行
-void reportBlocked(uint8_t index);
+uint16_t distanceMm(uint8_t index);
+void reportBlocked(uint8_t index, uint16_t mm);
+inline void reportBlocked(uint8_t index) { reportBlocked(index, distanceMm(index)); }
 void handleCommand(const char *line, bool moving);
 }

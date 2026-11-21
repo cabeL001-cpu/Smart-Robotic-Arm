@@ -387,6 +387,17 @@ python -m move.imu --replay "$RUN/imu-raw.csv" --fixes "$RUN/vision.jsonl" \
   --origin 0 0 0 --mount-yaw 0
 ~~~
 
+### 7.1 运行 A/B/C/D 和坐标导航
+
+部署支持 `NAV` 指令的本版完整 Uno 固件。分别保存 `$CFG/navigation/field.json`、`front.json` 和 `nav.json`，测量墙标地图、前摄内外参、起点与六向运动速率。四向净空读数正常后结束各串口与相机的独立读取程序。导航会话会独占这三台设备。[逐项标定及验收方法](move/CALIBRATION.md)
+
+~~~bash
+source "$CFG/devices.env"
+python -m move.navigation --config "$CFG/navigation/nav.json" --dock A B C D
+~~~
+
+同一命令的四段行程共用启动原点。遇障或探头缺测时 Uno 锁停，移开障碍后仍保持停车。人工确认四面有效且畅通后，`python -m move.navigation --reset-lock` 解除锁存。再次出发时按当前起姿重新建系。[任意坐标与异常接口](API.md)
+
 ## 8. 可选语音部署
 
 ### 8.1 麦克风、扬声器与离线识别
@@ -450,7 +461,7 @@ config.LLM_API_KEY = getpass("API Key ")
 print(listen())'
 ~~~
 
-说“请到九宫格四号位置”，期望返回 `('4', 'arrive')`，空指令等情况返回 `(None, None)`。当前语音分类支持格号 0–8。部署完成后，车轮点动、机械臂到格、车体定位及语音解析都有独立入口。将口令转换成 A/B/C/D 自动行驶还需要上层导航与调度。[语音接口](listen_speak/__init__.py) · [系统接口说明](README.md)
+说“请到九宫格四号位置”，期望返回 `('4', 'arrive')`，空指令等情况返回 `(None, None)`。当前语音分类支持格号 0–8。A/B/C/D 可从命令行指定，或由调用方将 `('A','arrive')` 和导航会话传给 `MHS.dispatch`。[语音接口](listen_speak/__init__.py) · [系统接口手册](API.md)
 
 ## 9. 下次开机与故障定位
 

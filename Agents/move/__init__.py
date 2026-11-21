@@ -28,7 +28,8 @@ def encode_command(action: str, duration_ms: int = DEFAULT_DURATION_MS) -> bytes
     return f"{action.upper()} {duration_ms}\n".encode("ascii")
 
 
-def move(action: str, duration_ms: int = DEFAULT_DURATION_MS, *, port: str = DEFAULT_PORT, link=None) -> None:
+def move(action: str, duration_ms: int = DEFAULT_DURATION_MS, *, port: str = DEFAULT_PORT,
+         link=None, guarded=False) -> None:
     """执行定时动作并等待停车。link 可复用已与机械臂共用的 Uno 连接。"""
     command = encode_command(action, duration_ms)
     with (nullcontext(link) if link is not None else open_uno(port)) as connection:
@@ -37,7 +38,7 @@ def move(action: str, duration_ms: int = DEFAULT_DURATION_MS, *, port: str = DEF
                 stop_wheels(connection)
             return
         try:
-            connection.write(command)
+            connection.write(b"NAV MOVE " + command if guarded else command)
             wait_reply(connection, b"OK MOVE")
             wait_reply(connection, b"DONE", duration_ms / 1000 + 1)
         except MotionBlocked:
