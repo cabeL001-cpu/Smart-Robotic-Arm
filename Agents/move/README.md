@@ -25,14 +25,14 @@ Uno 上电向各探头 `0x02` 寄存器写 `0x71` 并分别等待 2 秒预热。
 
 ### 单独读数
 
-在 `Agents` 中运行。`UNO_PORT` 取蓝牙同学提供的已就绪串行端点。每次独立打开端点会进行停车握手。持续观察用一次连接。
+在树莓派的 `Agents` 中运行。先配对 HC-05 并执行 `sh bt_link.sh bind`。下列命令优先读取环境变量 `UNO_PORT`，默认端点为 `/dev/rfcomm0`。每次独立打开端点会进行停车握手。[蓝牙配置](../BLUETOOTH_WORKFLOW.md)
 
 ~~~bash
-python -m move.sonar scan --port "$UNO_PORT"
-python -m move.sonar read --port "$UNO_PORT" --watch
+python -m move.sonar scan
+python -m move.sonar read --watch
 ~~~
 
-正常扫描依次显示 `0x69 0x72 0x6C 0x6A`。第二条每 0.25 秒显示缓存快照。`front/back/left/right` 各有十六进制 `address` 及 `mm`，缺测为 `null`。蓝牙模块若交付字节流对象，可在同一连接调用 `move.sonar.scan(link)`、`move.sonar.read(link)`。手动调试时发送 `SONAR SCAN` 或 `SONAR` 加换行，仅查询时输出数据，普通动作回执不会混入连续测距日志。
+正常扫描依次显示 `0x69 0x72 0x6C 0x6A`。第二条每 0.25 秒显示缓存快照。`front/back/left/right` 各有十六进制 `address` 及 `mm`，缺测为 `null`。在 `MHS.open_uno()` 返回的连接上可调用 `move.sonar.scan(link)`、`move.sonar.read(link)`。手动查询时发送 `SONAR SCAN` 或 `SONAR` 加换行。
 
 ## 现在可以在本机验证
 
@@ -82,6 +82,8 @@ python3 -m move go --ms 250
 ```
 
 运行 `go` 时，四路电机应同时按标定的前进方向转动约 250 毫秒，随后全部停止。终端收到停车回执后打印「Uno 已确认停车」。依次将 `m1` 换成 `m2`、`m3`、`m4` 可核对每个电机座对应的实物车轮。将车轮落地后再确认车体实际行进方向。
+
+**前进一秒。** 确认停车握手、前向测距和短时点动均正常后，从 `Agents` 运行 `python -m move.go_one_second`。脚本实际请求 `GO 1000`，使用同一套避障和到时停车逻辑。若只想预览指令，运行 `python -m move go --ms 1000 --dry-run`。
 
 ## 可用动作
 

@@ -1,6 +1,6 @@
 # HC-05 蓝牙链路配置与验收工作流
 
-适用于「树莓派 ↔ 扩展板蓝牙座上的 HC-05 ↔ Uno」这条控制链路。底盘、机械臂、视觉闭环和语音调度都经它下发命令。固件 `move/move.ino` 仍用 `Serial`，本次换成蓝牙不涉及固件改动。
+树莓派通过扩展板蓝牙座上的 HC-05 向 Uno 下发底盘、机械臂和视觉闭环动作。单独测量视觉、IMU 和识别语音时可分别运行各模块。Uno 固件使用硬件串口 `Serial`。
 
 链路全貌：
 
@@ -22,7 +22,7 @@
 | C | 链路往返 | 10 次 `STOP` 全部收到 `OK STOP` |
 | D | 烧录 | 拔模块烧录成功，插回后重新绑定成功 |
 | E | 功能 | 停车、四轮点动、机械臂、视觉闭环均通过 |
-| F | 稳定性 | 断链自动停车，模块重连后能恢复 |
+| F | 稳定性 | 断链后已接受的动作到期停车，模块重连后可再次握手 |
 
 任何一项失败，先按第 8 节处置，不要进入演示。
 
@@ -33,7 +33,7 @@
 - 底盘架空，负载电源可随时断开。
 - 知道本机模块编号：本批次为 `sjtu001`–`sjtu015`，本次使用 `sjtu006`。
 
-以下命令均在 `Agents` 目录、已激活虚拟环境中执行。
+以下命令均在树莓派的 `Agents` 目录、已激活的虚拟环境中执行。实机配置沿用部署指南，先在当前终端设置 `CFG="$HOME/.config/smart-robotic-arm"`。首次配对可直接从第 3 节开始；已有绑定时从停车握手开始。
 
 ## 2. A · 模块预检
 
@@ -113,7 +113,7 @@ rfcomm show rfcomm0
 
 ### 3.4 日常连接与断开
 
-理解这条链路的关键：**蓝牙连接只在有程序打开 `/dev/rfcomm0` 期间存在。** `move`、`arm`、`vision` 每次运行都会自己打开端口，用完关闭；关闭后 HC-05 回到待连接状态，指示灯重新快闪。**空闲时快闪不是故障**，命令执行期间才应该是双闪。
+通过 `rfcomm bind` 登记后，程序打开 `/dev/rfcomm0` 时才会建立连接。底盘控制、关节点动和 `vision.align` 闭环驱动都会打开串口，用完关闭。`vision.scan`、`vision.arm` 和 `vision.robot` 可单独采集画面。HC-05 空闲时可能快闪，判断链路用实际停车回执。
 
 ~~~text
 配对（一次，每台树莓派各做一遍）
@@ -190,7 +190,7 @@ stty -F /dev/rfcomm0 raw -echo
 
 1. 断开底盘和舵机负载电源，车轮架空。
 2. 从扩展板蓝牙座拔下 HC-05。
-3. 用 USB 线把 Uno 接到电脑或树莓派，按[部署指南第 4 节](DEPLOY_RASPBERRY_PI.md)烧录整个 `move` 草图。树莓派用 CLI 时端口填 `/dev/ttyACM0`，不是 `/dev/rfcomm0`。
+3. 用 USB 线把 Uno 接到烧录机，按 `arduino-cli board list` 显示的实际 USB 端口上传完整的 `move` 草图并校验。Windows 端口形如 `COM14`，树莓派上常见 `/dev/ttyACM0`。[Windows 和树莓派烧录步骤](DEPLOY_RASPBERRY_PI.md#4-将合并固件烧录到-uno)
 4. 关闭串口监视器，拔掉 USB。
 5. 把 HC-05 插回蓝牙座，接上 VIN1 逻辑电源。
 6. 重新绑定并做一次停车握手：
@@ -216,9 +216,12 @@ python -m move stop
 
 ### 6.2 机械臂
 
+先用本车的 `arm.json` 导出限位，烧录含该限位的固件。支撑连杆，选择靠近当前姿态、远离止挡的实测角度。默认固件收到关节指令会返回 `ERR ARM CALIBRATION`。[两轴标定与点动](arm/README.md)
+
 ~~~bash
-python -m arm --joints 0 0 --config "$CFG/arm.json"
-python -m arm --cell 4 --config "$CFG/arm.json"
+read -r -p "输入行程内的肩角和肘角（度，以空格分隔） " Q1 Q2
+python -m arm --joints "$Q1" "$Q2" --config "$CFG/arm.json" --dry-run
+python -m arm --joints "$Q1" "$Q2" --config "$CFG/arm.json"
 ~~~
 
 **判定：** 每次收到 `OK ARM`，舵机转到目标且不抖、不撞限位。
@@ -234,15 +237,19 @@ python -m vision.align --source 0 --config "$CFG/rig.json" \
 
 ### 6.4 共用连接
 
-连续控制车轮和机械臂时复用一次链路，避免反复握手：
+连续控制车轮和机械臂时可复用一次链路。把车停在已确认可达 4 号格的标定工位，在同一连接中停车、查询净空，再发送关节指令。
 
 ~~~python
+from pathlib import Path
 import MHS
+from arm import ArmConfig
+from move.sonar import read
 
+cfg = ArmConfig.load(Path.home() / ".config/smart-robotic-arm/arm.json")
 with MHS.open_uno() as link:
     MHS.move("stop", link=link)
-    MHS.move("go", 250, link=link)
-    MHS.arm("4", link=link)
+    print(read(link)["front"])
+    MHS.arm("4", config=cfg, link=link)
 ~~~
 
 **判定：** 三步在同一连接上按序完成，没有 `ERR BUSY` 或超时。
@@ -287,7 +294,7 @@ python -m move stop
 | 指示灯一直快闪 | 空闲时这是正常状态，链路只随程序打开而建立 | 以 `python -m move stop` 是否打印「Uno 已确认停车。」为准 |
 | `rfcomm connect` 报 `Host is down` | 模块没电、在 AT 模式或太远 | 查供电和灯色，靠近后重试 |
 | `rfcomm connect` 报 `Connection refused` | 链路密钥失效 | 重新配对：`remove` → 模块断电重上 → `pair`（1234）→ `trust` |
-| 有 `OK STOP` 但轮子不动 | 底盘电源、M1–M4 接线 | 断电检查电机座和电源 |
+| 有 `OK STOP` 但轮子不动 | 点动命令是否返回 `ERR OBSTACLE` 或 `ERR SONAR` | 用 `python -m move.sonar read` 核对方向和净空；若动作已收到 `DONE` 但车轮未转，断电检查底盘电源和对应 M 插座 |
 
 ## 9. 回滚到 USB
 
@@ -299,7 +306,7 @@ python -m move stop
 
 ~~~bash
 UNO_PORT=/dev/ttyACM0 python -m move stop
-UNO_PORT=/dev/ttyACM0 python -m arm --cell 4
+UNO_PORT=/dev/ttyACM0 python -m move.sonar read
 ~~~
 
 排查完再按第 3、5 节恢复蓝牙。
@@ -330,10 +337,10 @@ python -m move stop                                 # 必须看到「Uno 已确�
 | E | 停车握手 | `python -m move stop` | ☐ 通过 ☐ 失败 |
 | E | 单轮点动 M1–M4 | `python -m move mN --ms 200` | ☐ 通过 ☐ 失败 |
 | E | 四轮前进 | `python -m move go --ms 250` | ☐ 通过 ☐ 失败 |
-| E | 机械臂到格 | `python -m arm --cell 4` | ☐ 通过 ☐ 失败 |
+| E | 机械臂到格 | 在已确认可达的工位运行 `python -m arm --cell 4 --config "$CFG/arm.json"` | ☐ 通过 ☐ 失败 |
 | E | 视觉闭环 | `python -m vision.align ... --cell 4` | ☐ 通过 ☐ 失败 |
 | E | 共用连接 | `MHS.open_uno()` 连续动作 | ☐ 通过 ☐ 失败 |
-| F | 断链自动停车 | 运动中拔模块 5V | ☐ 通过 ☐ 失败 |
+| F | 断链后到期停车 | 架空测试，到达命令时长时确认车轮停止 | ☐ 通过 ☐ 失败 |
 | F | 重连恢复 | `release` + `bind` + `stop` | ☐ 通过 ☐ 失败 |
 
 全部必检项通过后，才进入口令到格心的完整演示。

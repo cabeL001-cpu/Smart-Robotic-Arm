@@ -22,11 +22,12 @@ python3 -m unittest move.imu.test_imu
 IMU 给出短时间相对位移，零偏会随积分产生位置漂移。相机看到场地固定标记后，可用同一树莓派上的曝光时间校正历史位姿，再保留曝光后发生的运动。程序接受最近一秒内的有序观测。无标记且搬动期间传感器未记录运动时，绝对位置需等下一次有效视觉观测才能恢复。
 
 ~~~bash
-python3 -m vision.robot --source 0 --config vehicle.json | python3 -m move.imu --port /dev/ttyUSB0 --vision-stdin
+source "$HOME/.config/smart-robotic-arm/devices.env"
+python3 -m vision.robot --source "$CAM" --config "$HOME/.config/smart-robotic-arm/vehicle.json" | python3 -m move.imu --port "$IMU_PORT" --vision-stdin
 python3 -m move.imu --replay run-raw.csv --fixes poses.jsonl
 ~~~
 
-两个实时进程使用同一台树莓派的单调时钟。离线回放要使用同次录制、同一时基的视觉 JSON 行。输入模块也可直接调用 `Tracker.correct(t, x_m, y_m, yaw_rad)`，用返回值判断观测是否被采用。[视觉位姿与相机标定](../../vision/README.md)
+实时管道使用已标定下视相机的 `vision.robot` 输出，两端共用同一台树莓派的单调时钟。前摄 `vision.scan front` 输出的是墙标像素坐标。离线回放要使用同次录制、同一时基的位姿 JSON 行。在线程序也可调用 `Tracker.correct(t, x_m, y_m, yaw_rad)`，用返回值判断观测是否被采用。[位姿标定](../../vision/README.md) · [部署时的设备配置](../../DEPLOY_RASPBERRY_PI.md)
 
 ## 资料与可重复验证
 

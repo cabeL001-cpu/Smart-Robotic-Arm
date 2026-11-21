@@ -1,16 +1,23 @@
 # 随车双相机视觉
 
-顶部相机固定在车上，向下看，离地约 1.5 m。棋盘固定于场地时，它既提供毫米尺，也提供车外的绝对参照。相机移动后，每一帧重新估计棋盘平面。
+顶部相机固定在车上，向下看，离地约 1.5 m。仅用这台相机即可测量末端与格心的距离，并在参照物可见且完成标定时估计车体位姿。车头另装前摄时，可独立识别围挡标签 1–4。两种输入各用自己的设备和标定文件。
 
 ## 双相机独立验收
 
-在树莓派的 `Agents` 目录运行。用 `ls -l /dev/v4l/by-id/` 确认两个 `video-index0` 图像节点。以下为本次实机的设备名。重新插拔后数字编号可能改变。
+从 `Agents` 运行。开发机可先用仓库内的实拍棋盘裁图验证检测器，预期 `board_tags_used` 为 4。
+
+~~~bash
+python -m vision.scan top --source vision/fixtures/printed-board.jpg --frames 1
+~~~
+
+接树莓派实机时，用 `ls -l /dev/v4l/by-id/` 确认各自的 `video-index0` 图像节点。以下设备名来自项目的双相机验收记录。使用单台下视相机时只执行顶摄命令。
 
 ~~~bash
 export CAM=/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_200901010001-video-index0
+python3 -m vision.scan top --source "$CAM" --frames 10
+
 export FRONT_CAM=/dev/v4l/by-id/usb-_Webcam_C170-video-index0
 python3 -m vision.scan front --source "$FRONT_CAM" --frames 10
-python3 -m vision.scan top --source "$CAM" --config mount.json --frames 10
 ~~~
 
 可在两个终端同时运行。将围挡标签完整放在车头正前方，黑框四周留出白边。前摄输出场地家族（默认 36h11，可用 `--field` 配置）中 ID 1–4 的中心和四角像素；空数组表示本帧没有读出墙标。该输出用于识别，车体的米制位姿仍由 `vision.robot` 提供。前摄标定文件可单独用 `--config` 指定。
@@ -27,7 +34,7 @@ python3 -m vision.scan top --source "$CAM" --config mount.json --frames 10
 python3 -m pip install -r vision/requirements.txt
 python3 -m unittest vision.test_arm
 python3 -m vision.arm --source 0 --cell 4 --config mount.json
-python3 -m vision.arm --source board.jpg --cell 4
+python3 -m vision.arm --source vision/fixtures/printed-board.jpg --cell 4
 ~~~
 
 输出 JSON 给出末端、目标、欧氏误差（毫米）、参与拟合的标签数和重投影误差（像素）。`measurement: null` 表示该帧缺少参照或末端。连续新帧误差小于 6.7 mm 达 2 秒才出现 `arrived: true`。图片适合检查单帧测量，录像可检查连续到位。
