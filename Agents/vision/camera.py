@@ -4,6 +4,7 @@ from dataclasses import dataclass, asdict
 import json
 from pathlib import Path
 from time import monotonic
+import sys
 
 import cv2
 import numpy as np
@@ -25,6 +26,8 @@ class Mount:
 
     robot_center_px: tuple = ()     # 车体中心的地面投影像素
     robot_forward_px: tuple = ()    # 前方第二个地面点的像素
+    front_xyz_mm: tuple = ()        # 前摄光心相对车心地面投影，轴为前、左、上
+    front_ypr_deg: tuple = ()       # 前摄安装偏航、仰角、滚转
 
     @classmethod
     def load(cls, path=None):
@@ -43,6 +46,13 @@ class Mount:
         return frame
 
 
+def live_source(source):
+    if str(source).isdecimal():
+        return True
+    path = Path(source).resolve()
+    return path.parent == Path("/dev") and path.name.startswith("video") and path.name[5:].isdecimal() and path.is_char_device()
+
+
 def frames(source, mount):
     """相机用单调时钟，视频用录像时间。静态图片只产生一帧。"""
     if not str(source).isdecimal() and Path(source).suffix.lower() in {".png", ".jpg", ".jpeg", ".bmp"}:
@@ -51,11 +61,17 @@ def frames(source, mount):
             raise OSError(f"图片读取失败 {source}")
         yield 0.0, mount.rectify(frame)
         return
-    live = str(source).isdecimal()
-    capture = cv2.VideoCapture(int(source) if live else str(source))
+    live = live_source(source)
+    device = int(source) if str(source).isdecimal() else str(source)
+    backend = cv2.CAP_V4L2 if live and sys.platform.startswith("linux") else cv2.CAP_ANY
+    capture = cv2.VideoCapture(device, backend)
     try:
         if not capture.isOpened():
             raise OSError(f"无法打开相机或录像 {source}")
+        if live and sys.platform.startswith("linux"):
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # 两路 USB 摄像头共享总线时优先请求压缩帧；驱动可保留自己的默认格式。
+            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         if live and mount.image_size:
             capture.set(cv2.CAP_PROP_FRAME_WIDTH, mount.image_size[0])
             capture.set(cv2.CAP_PROP_FRAME_HEIGHT, mount.image_size[1])

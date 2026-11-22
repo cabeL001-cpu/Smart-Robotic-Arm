@@ -115,8 +115,9 @@ int8_t blockedDirection(uint8_t mask) {
   return -1;
 }
 
-void reportBlocked(uint8_t i) {
-  const uint16_t mm = freshMm(i);
+uint16_t distanceMm(uint8_t i) { return freshMm(i); }
+
+void reportBlocked(uint8_t i, uint16_t mm) {
   Serial.print(mm ? F("ERR OBSTACLE ") : F("ERR SONAR "));
   Serial.print(NAMES[i]);
   if (mm) {

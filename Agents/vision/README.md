@@ -1,6 +1,35 @@
-# 随车单相机视觉
+# 随车双相机视觉
 
-相机固定在车上，向下看，离地约 1.5 m。棋盘固定于场地时，它既提供毫米尺，也提供车外的绝对参照。相机移动后，每一帧重新估计棋盘平面。
+顶部相机固定在车上，向下看，离地约 1.5 m。仅用这台相机即可测量末端与格心的距离，并在参照物可见且完成标定时估计车体位姿。车头另装前摄时，可独立识别围挡标签 1–4。两种输入各用自己的设备和标定文件。
+
+## 双相机独立验收
+
+从 `Agents` 运行。开发机可先用仓库内的实拍棋盘裁图验证检测器，预期 `board_tags_used` 为 4。
+
+~~~bash
+python -m vision.scan top --source vision/fixtures/printed-board.jpg --frames 1
+~~~
+
+接树莓派实机时，用 `ls -l /dev/v4l/by-id/` 确认各自的 `video-index0` 图像节点。以下设备名来自项目的双相机验收记录。使用单台下视相机时只执行顶摄命令。
+
+~~~bash
+export CAM=/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_200901010001-video-index0
+python3 -m vision.scan top --source "$CAM" --frames 10
+
+export FRONT_CAM=/dev/v4l/by-id/usb-_Webcam_C170-video-index0
+python3 -m vision.scan front --source "$FRONT_CAM" --frames 10
+~~~
+
+可在两个终端同时运行。将围挡标签完整放在车头正前方，黑框四周留出白边。`vision.scan front` 输出场地家族和已配置 ID（默认 36h11 / 1–4）的中心和四角像素，空数组表示本帧没有读出墙标。前摄完成镜头、安装和墙标地图标定后，`vision.front` 会输出车心的米制位置和弧度航向，导航直接调用同一估计器。顶摄的 `vision.robot` 可独立测量。[前摄标定步骤](../move/CALIBRATION.md)
+
+~~~bash
+python -m vision.front --source "$FRONT_CAM" --config "$CFG/navigation/front.json" \
+  --field "$CFG/navigation/field.json" --frames 20
+~~~
+
+顶摄配置应与实机分辨率匹配，例如 `{"image_size":[1280,720]}`。令棋盘四角入镜。实物版输出 `printed5` 编号 0–3（左下、右下、左上、右上）。这四个编号是本项目按图案分配的位置编号。程序从候选四边形采样 5×5 码字，在四种旋转方向下校验黑边和编码；两角已知时会在预计邻域复核缺失码字。输出 `board_tags_used` 表示拟合实际使用的角标数。棋盘单独入镜即可验收四角；测量指尖还需同帧读到末端标签。实物版按图尺估算黑框约 15 mm，验收毫米误差前请实测黑框和棋盘外边长。
+
+本次树莓派验收中，C270 顶摄以 1280×720 连续采样 20 帧，19 帧读齐四角，20 帧均拟合出棋盘；C170 前摄以 640×480 读到围挡 36h11 / 1。可用 `python3 -m unittest vision.test_scan` 重跑实拍棋盘裁图和前摄编号筛选测试。
 
 ## 机械臂末端与格心
 
@@ -10,12 +39,12 @@
 python3 -m pip install -r vision/requirements.txt
 python3 -m unittest vision.test_arm
 python3 -m vision.arm --source 0 --cell 4 --config mount.json
-python3 -m vision.arm --source board.jpg --cell 4
+python3 -m vision.arm --source vision/fixtures/printed-board.jpg --cell 4
 ~~~
 
 输出 JSON 给出末端、目标、欧氏误差（毫米）、参与拟合的标签数和重投影误差（像素）。`measurement: null` 表示该帧缺少参照或末端。连续新帧误差小于 6.7 mm 达 2 秒才出现 `arrived: true`。图片适合检查单帧测量，录像可检查连续到位。
 
-棋盘为 200 × 200 mm，左下为 (0, 0)，左下、右下、左上、右上分别为 tag36h11 的 0、1、2、3。每个黑边外沿为 20 mm，印刷方向按模板。程序用至少两个标签的角点拟合平面。末端默认使用实物照片中的 **tag36h10 / 100**，家族和 ID 均可改。只看到末端时会报告观测缺失。[棋盘模板](../image-7.png) · [OpenCV 标签角点约定](https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html)
+旧版模板棋盘为 200 × 200 mm，左下为 (0, 0)，左下、右下、左上、右上分别为 tag36h11 的 0、1、2、3。每个黑边外沿为 20 mm，印刷方向按模板。程序用至少两个标签的角点拟合平面。末端默认使用实物照片中的 **tag36h10 / 100**，家族和 ID 均可改。只看到末端时会报告观测缺失。[棋盘模板](../image-7.png) · [OpenCV 标签角点约定](https://docs.opencv.org/4.x/d5/dae/tutorial_aruco_detection.html)
 
 ## 相机安装标定
 

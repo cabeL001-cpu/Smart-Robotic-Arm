@@ -22,11 +22,12 @@ python3 -m unittest move.imu.test_imu
 IMU 给出短时间相对位移，零偏会随积分产生位置漂移。相机看到场地固定标记后，可用同一树莓派上的曝光时间校正历史位姿，再保留曝光后发生的运动。程序接受最近一秒内的有序观测。无标记且搬动期间传感器未记录运动时，绝对位置需等下一次有效视觉观测才能恢复。
 
 ~~~bash
-python3 -m vision.robot --source 0 --config vehicle.json | python3 -m move.imu --port /dev/ttyUSB0 --vision-stdin
+source "$HOME/.config/smart-robotic-arm/devices.env"
+python3 -m vision.robot --source "$CAM" --config "$HOME/.config/smart-robotic-arm/vehicle.json" | python3 -m move.imu --port "$IMU_PORT" --vision-stdin
 python3 -m move.imu --replay run-raw.csv --fixes poses.jsonl
 ~~~
 
-两个实时进程使用同一台树莓派的单调时钟。离线回放要使用同次录制、同一时基的视觉 JSON 行。输入模块也可直接调用 `Tracker.correct(t, x_m, y_m, yaw_rad)`，用返回值判断观测是否被采用。[视觉位姿与相机标定](../../vision/README.md)
+实时管道可使用已标定顶摄 `vision.robot` 或前摄 `vision.front` 输出的米制位姿。两端共用同一台树莓派的单调时钟，离线回放使用同次录制、同一时基的位姿 JSON 行。在线程序可用 `Tracker.state_at(t)` 取得对应时刻的惯性状态，调用 `Tracker.correct(t,x_m,y_m,yaw_rad)` 校正，并检查是否被接受。自动导航在独立线程连续采样，停车后施加零速约束，利用未折返的累计航向确认整圈。[导航标定](../CALIBRATION.md) · [位姿观测](../../vision/README.md)
 
 ## 资料与可重复验证
 

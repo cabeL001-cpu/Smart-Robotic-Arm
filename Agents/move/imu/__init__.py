@@ -94,10 +94,10 @@ class Tracker:
             self.history.popleft()
         return self.state
 
-    def correct(self, t, x_m, y_m, yaw_rad):
-        """将绝对观测与对应时刻的估计对齐，并保留曝光后发生的相对运动。"""
-        if t <= self.last_fix or not self.history[0].t <= t <= self.state.t or self.state.t-t > 1:
-            return False
+    def state_at(self, t):
+        """在最近一秒的惯性轨迹上插值，历史外返回 None。"""
+        if not self.history[0].t <= t <= self.state.t or self.state.t-t > 1:
+            return None
         before, after = self.history[0], self.state
         for s in self.history:
             if s.t >= t:
@@ -108,12 +108,21 @@ class Tracker:
         ref_x = before.x_m+f*(after.x_m-before.x_m)
         ref_y = before.y_m+f*(after.y_m-before.y_m)
         ref_yaw = before.yaw_rad+f*wrap(after.yaw_rad-before.yaw_rad)
-        turn = wrap(yaw_rad-ref_yaw)
+        return State(t, ref_x, ref_y, wrap(ref_yaw),
+                     before.vx_mps + f*(after.vx_mps-before.vx_mps),
+                     before.vy_mps + f*(after.vy_mps-before.vy_mps))
+
+    def correct(self, t, x_m, y_m, yaw_rad):
+        """将绝对观测与对应时刻的估计对齐，并保留曝光后发生的相对运动。"""
+        ref = self.state_at(t)
+        if ref is None or t <= self.last_fix:
+            return False
+        turn = wrap(yaw_rad-ref.yaw_rad)
         self.offset = wrap(self.offset+turn)
         self.previous_acc = rotate(*self.previous_acc, turn)
         corrected = deque()
         for s in self.history:
-            dx, dy = rotate(s.x_m-ref_x, s.y_m-ref_y, turn)
+            dx, dy = rotate(s.x_m-ref.x_m, s.y_m-ref.y_m, turn)
             vx, vy = rotate(s.vx_mps, s.vy_mps, turn)
             corrected.append(State(s.t, x_m+dx, y_m+dy, wrap(s.yaw_rad+turn), vx, vy))
         self.history, self.state, self.last_fix = corrected, corrected[-1], t

@@ -40,7 +40,7 @@ def main():
     p.add_argument("--calibration-seconds", type=float, default=2.)
     p.add_argument("--stationary", action="store_true", help="台架静止测试，持续给出零速约束")
     aid = p.add_mutually_exclusive_group()
-    aid.add_argument("--vision-stdin", action="store_true", help="实时读取 vision.robot 的 JSON 行")
+    aid.add_argument("--vision-stdin", action="store_true", help="实时读取 vision.robot 或 vision.front 的位姿 JSON 行")
     aid.add_argument("--fixes", help="回放同一时基记录的视觉 JSON 行")
     args = p.parse_args()
     if args.calibration_seconds <= 0:

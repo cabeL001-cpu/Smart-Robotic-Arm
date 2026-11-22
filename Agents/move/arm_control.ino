@@ -1,13 +1,19 @@
 #include <Servo.h>
 #include "arm_limits.h"
 
-// 肩部接扩展板 D13 信号针，肘部接 Uno 数字 D10。D10 同时控制扩展板 VOUT，须保持 VOUT 空载。
-const uint8_t SHOULDER_PIN = 13;
+// 肩部接扩展板 A4（D18）信号针，肘部接 Uno 数字 D10。D10 同时控制扩展板 VOUT，须保持 VOUT 空载。
+const uint8_t SHOULDER_PIN = 18;
 const uint8_t ELBOW_PIN = 10;
 Servo shoulderServo;
 Servo elbowServo;
 
 void setArmPulses(char *arguments) {
+  if (strcmp(arguments, "OFF") == 0) {
+    shoulderServo.detach();
+    elbowServo.detach();
+    Serial.println(F("OK ARM OFF"));
+    return;
+  }
   if (SHOULDER_MIN_US < 500 || SHOULDER_MAX_US > 2500 || SHOULDER_MIN_US > SHOULDER_MAX_US ||
       ELBOW_MIN_US < 500 || ELBOW_MAX_US > 2500 || ELBOW_MIN_US > ELBOW_MAX_US) {
     Serial.println(F("ERR ARM CALIBRATION"));

@@ -1,23 +1,42 @@
 # 银立方机器人系统集成
 
-实车通过 HC-05 蓝牙把命令交给独立供电的 Uno（树莓派侧绑定为 `/dev/rfcomm0`）。Uno 在本机轮询四个 SR09，驱动四轮及两台 MG995。在 `Agents` 目录导入 `MHS`。组合动作使用 `MHS.open_uno` 复用串口，底盘回执表示已停车，舵机回执表示关节指令已接受。蓝牙链路的配置与逐项验收见 [BLUETOOTH_WORKFLOW.md](BLUETOOTH_WORKFLOW.md)。
+全部 Python 命令从 `Agents/` 运行。首次装机先完成接线、依赖安装和 Uno 固件烧录。日常运行由车载电源供电，树莓派经 HC-05 的 `/dev/rfcomm0` 向 Uno 发送命令，YbImu 使用独立 USB 串口。[部署指南](DEPLOY_RASPBERRY_PI.md) · [HC-05 配对与绑定](BLUETOOTH_WORKFLOW.md)
 
-```python
-import os
-import MHS
+## 验证车载链路
 
-MHS.move("go", 250, port=os.environ.get("UNO_PORT", "/dev/rfcomm0"))
+在已配对的树莓派上激活项目虚拟环境。先将四轮架空，关闭轮臂负载电源，保留主控和探头供电。下列命令只停车和读取传感器。
+
+```bash
+sh bt_link.sh bind
+python -m move stop
+python -m move.sonar scan
+python -m move.sonar read
 ```
 
-| 模块 | 接口与集成状态 | 模块说明 |
+停车握手成功会显示「Uno 已确认停车。」。扫描应依次列出前 `0x69`、后 `0x72`、左 `0x6C`、右 `0x6A`。待探头预热并取得回波后，最后一条会给出四个方向的毫米读数；缺测显示 `null`。实车点动步骤见底盘说明。
+
+## 模块入口
+
+| 模块 | 入口与输出 | 说明 |
 | --- | --- | --- |
-| move 底盘 | `MHS.move(action, duration_ms, port=...)`，提供树莓派命令行与 Uno 固件 | [接线、安装、点动和串口协议](move/README.md) |
-| 四向避障 | 前 `0x69`、后 `0x72`、左 `0x6C`、右 `0x6A`。`python -m move.sonar read --watch --port "$UNO_PORT"` 查看距离，底盘自行拒绝或停止受阻动作 | [探头接线、规则与回执](move/README.md) |
-| arm 机械臂 | 肩部信号接 Uno D13，肘部接 D10。`MHS.arm(cell, config=cfg)` 在两轴各自最大位置回退 90° 的限位内规划。实测标定导出给 Uno 后执行 | [接线、标定与点动](arm/README.md) |
-| vision 视觉与定位 | 随车单相机同时测量格心误差和场地位姿。`python3 -m vision.robot --cell 4` 可共用同一帧 | [视觉与定位说明](vision/README.md) |
-| IMU 定位 | 独立读取 YbImu 串口、静止校准、二维推算与带时间戳的视觉校正 | [实时采样、回放和融合](move/imu/README.md) |
-| listen_speak 语音 | 已有独立的识别和播报接口，底盘可单独运行 | [语音接口与使用方法](listen_speak/README.md) |
+| 坐标导航 | `MHS.open_navigation` 在一次启动零点下依次执行 `nav.go_to_dock("A")` 或 `nav.go_to(x_m,y_m)`。IMU 粗定位、前摄整圈扫描和视觉微调共用 Uno 四向锁停 | [小车标定与运行](move/CALIBRATION.md) · [接口与参数](API.md) |
+| 四轮与避障 | `MHS.move(action, duration_ms)` 请求定时动作，Uno 按方向检查 SR09，到时停车或报告受阻。`python -m move.go_one_second` 会实际请求前进一秒 | [接线、点动与一秒测试](move/README.md) |
+| 机械臂 | `MHS.arm(cell, config=cfg)` 规划肩、肘两轴。肩接 D13，肘接 D10，先用实测参数导出 Uno 限位 | [行程标定与验收](arm/README.md) |
+| 视觉 | 顶摄 `vision.arm`、`vision.robot`、`vision.align` 分别测末端、测车心和闭环到格。前摄 `vision.scan front` 读墙标像素，`vision.front` 由地图和内外参输出米制车心 | [相机设置与示例](vision/README.md) · [机械臂标定](arm/CALIBRATION.md) |
+| IMU | `python -m move.imu` 输出平面位置与航向；`--vision-stdin` 可接收同机 `vision.robot` 的位姿修正 | [采样、记录与回放](move/imu/README.md) |
+| 语音 | `MHS.listen()` 返回格号和动作，`MHS.say(text)` 播报文本，`listen_speak.say_event()` 播报预设事件 | [语音接口与自测](listen_speak/README.md) |
 
-系统约定上层的 `("A", "arrive")` 表示前往停靠点，`("4", "arrive")` 表示将机械臂末端移到 4 号格。视觉提供米和弧度格式的车体位姿，路径规划可将停靠目标转换为底盘动作。当前的 `MHS.move("go", 250)` 只执行一次定时前进，回执可用于安排下一步动作。现有语音解析器的输出范围见其模块说明。
+## 共用 Uno 连接
 
-在本机先进入 `Agents`，运行 `python -m move go --ms 250 --dry-run` 可预览指令。实车使用时，先为 Uno 准备固件，再在树莓派选择实际串口。[四轮底盘操作步骤](move/README.md)
+先配置好蓝牙与探头。在一次 `MHS.open_uno()` 中顺序调用多个接口可以复用停车握手。下面的示例查询前方距离。
+
+```python
+import MHS
+from move.sonar import read
+
+with MHS.open_uno() as link:
+    MHS.move("stop", link=link)
+    print(read(link)["front"]["mm"])
+```
+
+`OK ARM` 表示 Uno 已设置两路舵机输出，末端是否到达格心由顶摄测量。语音当前返回 `("4","arrive")` 等格号，`MHS.dispatch` 可将它交给已标定工位的机械臂。调用方也可直接传 `("A","arrive")` 和已打开的 `navigator`，启动字母点导航。若需在导航会话中操作手臂，使用 `nav.shared_link()` 或 `MHS.dispatch` 顺序复用连接。[调用和返回示例](API.md)

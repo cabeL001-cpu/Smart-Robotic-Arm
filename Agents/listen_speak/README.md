@@ -6,7 +6,7 @@
 
 - **语音识别**：麦克风录音 → 能量 VAD 断句 → Vosk 离线识别
 - **指令解析**：识别文本 → DeepSeek Flash → 校验 → `(格数, 动作)`
-- **语音播报**：edge-tts 在线合成；断网时用 espeak-ng 或缓存播放
+- **语音播报**优先播放缓存。需要合成时，在线使用 edge-tts，离线使用 Piper，Piper 失败后使用 espeak-ng。
 
 一句话总结：`听懂 → 返回 (格数, "arrive") → 播报状态`。
 
@@ -30,7 +30,7 @@ result = listen()
 
 - **格数**：`"0"` ~ `"8"`，字符串
 - **动作**：固定字符串 `"arrive"`
-- A-D 停靠角不由本模块判断，交给其他程序
+- A-D 停靠可由上层调用 `MHS.dispatch(("A", "arrive"), navigator=nav)`。本模块的语音分类目前只产生 0–8 格号。[系统调用示例](../API.md)
 
 播报接口：
 
@@ -127,7 +127,7 @@ listen()
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
-| `LLM_API_KEY` | `""` | **留空，使用前自行填入 DeepSeek API Key** |
+| `LLM_API_KEY` | `""` | 完整口令测试可按部署指南在进程启动后交互输入密钥 |
 | `LLM_BASE_URL` | `https://api.deepseek.com` | 接口地址，换网关时修改 |
 | `LLM_MODEL` | `deepseek-flash` | 模型名 |
 | `LLM_TIMEOUT` | `3.0` | 单次请求超时（秒） |
@@ -143,11 +143,12 @@ listen()
 
 ## 七、运行环境与依赖
 
-树莓派上使用 `~/mx` 虚拟环境（里面已有 vosk、pyaudio、pyttsx3、numpy、requests）：
+在树莓派的 `Agents` 目录安装依赖。下面使用部署指南创建的虚拟环境，已有 `~/mx` 环境时也可激活该环境。
 
 ```bash
-source ~/mx/bin/activate
-pip install -r requirements.txt        # 主要新增 edge-tts、piper-tts
+cd ~/Smart-Robotic-Arm/Agents
+source ~/.venvs/smart-robotic-arm/bin/activate
+python -m pip install -r listen_speak/requirements.txt
 ```
 
 系统依赖（已安装）：`espeak-ng`、`ffmpeg`、`pipewire`（提供 `pw-play`）。
@@ -166,7 +167,7 @@ curl -L -o zh_CN-huayan-medium.onnx.json \
 
 ## 八、自测命令
 
-在 `Agents/` 目录下执行：
+安装模型后切回 `Agents/`，在同一虚拟环境执行。完整链路需要麦克风、扬声器与可用的模型服务。[部署、模型位置与密钥输入](../DEPLOY_RASPBERRY_PI.md#8-可选语音部署)
 
 ```bash
 # 1. 预生成固定播报（需要联网和 edge-tts）
@@ -181,8 +182,8 @@ python -m listen_speak.asr
 # 4. 只测大模型解析（需要先填 API Key）
 python -m listen_speak.llm "请到九宫格的4号位置"
 
-# 5. 完整链路
-python -m listen_speak
+# 5. 完整链路，密钥仅用于本次进程
+python -c 'from getpass import getpass; from listen_speak import config, listen; config.LLM_API_KEY = getpass("API Key "); print(listen())'
 ```
 
 ## 九、离线与异常行为

@@ -2,6 +2,10 @@
 
 树莓派把一个动作和持续时间发给 Uno。Uno 调用原草图中已调好的动作函数，到时将四路电机输出归零并回复树莓派。方向以车体为准，时长的单位是毫秒。
 
+## 启动零点、停靠点与任意坐标
+
+标定 IMU、前摄、墙面标签和轮速后，从 `Agents` 运行 `python -m move.navigation --config "$CFG/navigation/nav.json" --dock A B C D`。`--xy X Y --frame start` 使用启动时车心为零点的米坐标，`--frame field` 使用地图坐标。程序先惯性粗走，再按 IMU 实测转满一圈，停车取新帧并微调。[小车标定与锁停恢复](CALIBRATION.md) · [Python 与 Uno 指令](../API.md)
+
 ## 四向 SR09 避障
 
 IIC 扩展板任选一个 4P 口接 Uno 主控，另四口各接一个 SR09。主控侧 `SDA→A4`、`SCL→A5`、`VCC→V`、`GND→G`。连接前核对端子凸起和两端的 GND 丝印，课件这组 4P 线的白线接探头 GND。四个插口电气并联，方向由实物标签确定。地址是七位值，保持探头原地址。
@@ -19,20 +23,20 @@ Uno 上电向各探头 `0x02` 寄存器写 `0x71` 并分别等待 2 秒预热。
 | 旋转、两种偏转、单轮点动 | 四面 |
 | `STOP` | 随时执行 |
 
-启动前与运动中都检查所需方向。距离 **≤300 mm** 时拦截或立即下达四轮停车，回复如 `ERR OBSTACLE FRONT 240`。未预热、NACK、短读、0、超量程（≥6000 mm）或读数已超过 **650 ms**，回复如 `ERR SONAR FRONT`。故障探头恢复后会重新初始化。前方受阻时仍可发后退命令，前提是后方有有效净空。移走障碍物后需要一条新的动作指令。Python 调用方可捕获 `move.MotionBlocked` 获取原因。
+手动模式在启动前与运动中按上表检查所需方向。距离 **≤300 mm** 时拦截或停车，回复如 `ERR OBSTACLE FRONT 240`。未预热、NACK、短读、0、超量程（≥6000 mm）或读数已超过 **650 ms**，回复如 `ERR SONAR FRONT`。手动待命时可对畅通方向发新动作。导航模式在行驶、扫描及停车等待时均检查四面，记录首次受阻原因并锁住所有车轮动作。移走障碍后由操作员确认四向净空并显式 `NAV RESET`。Python 调用方可捕获 `move.MotionBlocked` 获取原因。
 
 **阈值需按实车验证。** 一轮四探头测量约 0.43 秒，300 mm 是初始设置。按实测最高车速乘以最坏观测延迟，加上车辆制动距离、探头相对车沿的后缩距离和余量，确定 `STOP_MM` 并重新编译。验收时将轮子架空，在每只探头前放置可产生回波的平板，先在阈值外，再在阈值内观察。开阔场地无有效回波时该方向也会保持停车。[阈值定义](sonar.h)
 
 ### 单独读数
 
-在 `Agents` 中运行。`UNO_PORT` 取蓝牙同学提供的已就绪串行端点。每次独立打开端点会进行停车握手。持续观察用一次连接。
+在树莓派的 `Agents` 中运行。先配对 HC-05 并执行 `sh bt_link.sh bind`。下列命令优先读取环境变量 `UNO_PORT`，默认端点为 `/dev/rfcomm0`。每次独立打开端点会进行停车握手。[蓝牙配置](../BLUETOOTH_WORKFLOW.md)
 
 ~~~bash
-python -m move.sonar scan --port "$UNO_PORT"
-python -m move.sonar read --port "$UNO_PORT" --watch
+python -m move.sonar scan
+python -m move.sonar read --watch
 ~~~
 
-正常扫描依次显示 `0x69 0x72 0x6C 0x6A`。第二条每 0.25 秒显示缓存快照。`front/back/left/right` 各有十六进制 `address` 及 `mm`，缺测为 `null`。蓝牙模块若交付字节流对象，可在同一连接调用 `move.sonar.scan(link)`、`move.sonar.read(link)`。手动调试时发送 `SONAR SCAN` 或 `SONAR` 加换行，仅查询时输出数据，普通动作回执不会混入连续测距日志。
+正常扫描依次显示 `0x69 0x72 0x6C 0x6A`。第二条每 0.25 秒显示缓存快照。`front/back/left/right` 各有十六进制 `address` 及 `mm`，缺测为 `null`。在 `MHS.open_uno()` 返回的连接上可调用 `move.sonar.scan(link)`、`move.sonar.read(link)`。手动查询时发送 `SONAR SCAN` 或 `SONAR` 加换行。
 
 ## 现在可以在本机验证
 
@@ -82,6 +86,8 @@ python3 -m move go --ms 250
 ```
 
 运行 `go` 时，四路电机应同时按标定的前进方向转动约 250 毫秒，随后全部停止。终端收到停车回执后打印「Uno 已确认停车」。依次将 `m1` 换成 `m2`、`m3`、`m4` 可核对每个电机座对应的实物车轮。将车轮落地后再确认车体实际行进方向。
+
+**前进一秒。** 确认停车握手、前向测距和短时点动均正常后，从 `Agents` 运行 `python -m move.go_one_second`。脚本实际请求 `GO 1000`，使用同一套避障和到时停车逻辑。若只想预览指令，运行 `python -m move go --ms 1000 --dry-run`。
 
 ## 可用动作
 

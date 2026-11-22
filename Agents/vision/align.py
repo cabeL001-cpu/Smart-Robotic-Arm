@@ -8,7 +8,7 @@ import numpy as np
 
 from .arm import Hold, measure, target_xy
 from .board import axes, fit_plane, project
-from .camera import Mount, frames
+from .camera import Mount, frames, live_source
 from .tags import Detector
 
 if "." in __package__:
@@ -83,7 +83,7 @@ def main():
             mount.save(args.save_mount)
             return
         p.exit(1, "标定图像中没有足够的已知棋盘角标。\n")
-    if not args.source.isdecimal():
+    if not live_source(args.source):
         p.error("驱动舵机需要实时相机编号。录像可用 vision.arm 测量")
     config = ArmConfig.load(args.arm_config) if args.arm_config else ArmConfig()
     if not mount.arm_base_px or not mount.arm_x_px:

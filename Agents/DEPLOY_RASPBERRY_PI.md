@@ -1,12 +1,12 @@
 # 银立方机器人 · 树莓派部署指南
 
-树莓派运行 Python，通过板载蓝牙与扩展板上的 HC-05 交换命令，树莓派侧绑定为 `/dev/rfcomm0`。经典 Arduino Uno 运行一份同时驱动四向 SR09 避障、四轮和两台 MG995 的固件。车上只有一台距地约 1.5 m 的下视摄像头，供机械臂与车体定位共用。YbImu 通过自己的 USB 串口把数据送到树莓派。
+树莓派运行 Python，通过板载蓝牙与扩展板上的 HC-05 交换命令，树莓派侧绑定为 `/dev/rfcomm0`。经典 Arduino Uno 运行一份同时驱动四向 SR09 避障、四轮和两台 MG995 的固件。距地约 1.5 m 的随车下视相机供机械臂与车体定位共用。配有第二台相机时，车头前摄可独立读取围挡标签。YbImu 使用自己的 USB 串口。
 
 首次装机按第 1–7 节进行。**只验收四轮**时，第 2 节只装 `move/requirements.txt` 并运行底盘预览，第 3 节配对蓝牙并确认 `UNO_PORT`，随后烧录第 4 节的完整草图，按第 5.1 节验证四个 SR09 后点动。只部署语音时，先完成第 2 节的代码复制和虚拟环境创建，再转到第 8 节。实物的串口名、电源规格、轮序、舵机行程和相机标定值需要现场核对。
 
 ## 1. 断电接线
 
-准备树莓派及适配该型号的电源和系统盘、不含无线模块的经典 Uno R3（ATmega328P）及项目扩展板、四个直流减速电机、两台 MG995、下视摄像头、YbImu、四个 SR09 及一块五口 IIC 扩展板、对应 4P 线、HC-05 蓝牙模块、烧录及 IMU 所需的 USB 数据线，以及车载主控电源、底盘电源和舵机稳压电源。语音另需麦克风与扬声器，可复用摄像头自带的麦克风。
+准备树莓派及配套电源和系统盘、经典 Uno R3（ATmega328P）及扩展板、四个直流减速电机、两台 MG995、一台下视相机、YbImu、四个 SR09 与五口 IIC 扩展板、4P 线、HC-05、USB 数据线，以及车载主控、底盘和舵机电源。识别车头前方围挡标签时再接前摄；语音模块另需麦克风与扬声器。
 
 | 从哪里接 | 接到哪里 | 接线依据 |
 | --- | --- | --- |
@@ -14,6 +14,7 @@
 | Uno 主控 `G、V、A4、A5` | 五口 IIC 扩展板的 `GND、VCC、SDA、SCL` | 一个端子接主控，另四个端子各接一组 SR09。按 GND 丝印和端子方向核对线序 |
 | 前、后、左、右 SR09 | IIC 扩展板任意四个空口 | 以车体为准，前 `0x69`、后 `0x72`、左 `0x6C`、右 `0x6A`。插口并联，不需改址 |
 | 树莓派另一 USB 口 | YbImu 的 USB 数据口 | 独立串口，`115200` 波特、8N1。将 IMU 刚性固定在底盘，记录其 +X 相对车头的方向 |
+| 另一树莓派 USB 主机口 | 前视 USB 摄像头 | 固定在车头中部，完整拍到围挡标签 |
 | 树莓派 USB 主机口 | 随车下视 USB 摄像头 | 本文按 Linux 可读的 V4L2 摄像头部署。支架固定在车上，镜头朝地，棋盘固定在场地上 |
 | 电机 1、2、3、4 的两根线 | 扩展板 `M1`、`M2`、`M3`、`M4` 电机座 | 对应的 Uno **方向 / PWM** 分别为 **D2 / D3、D4 / D5、D8 / D6、D12 / D11**。沿用原调参轮序，用单轮点动记录实际车轮位置 |
 | 肩部 MG995 信号线 | 扩展板舵机接口 **D13 的 S** | 肩部指靠车体的基座关节 |
@@ -46,11 +47,11 @@ sudo usermod -aG dialout,video "$USER"
 
 **复制项目，选一种来源。**
 
-- 要部署当前电脑上的代码，在 **Windows PowerShell** 运行下列两行。目标是树莓派用户主目录下的项目目录。复制整个 `Agents` 能保留 Uno 草图、超声波驱动、舵机限位头文件、Python 包和测试用图。功能仍在本机工作区时，用这条路径取得当前代码。已有同名部署时，先选一个空目录或备份实车上的本地改动，再复制。
+- 要部署当前电脑上的代码，在仓库根目录打开 **Windows PowerShell**。将示例的用户名和主机名换成实机值。复制整个 `Agents` 会带上 Uno 草图、限位头文件、Python 包和测试用图。已有同名部署时，先备份实机上的本地改动。
 
 ~~~powershell
 ssh operator@robot.local "mkdir -p ~/Smart-Robotic-Arm"
-scp -r "C:\Users\cabel\Desktop\me1004\Smart-Robotic-Arm\Agents" operator@robot.local:Smart-Robotic-Arm/
+scp -r .\Agents operator@robot.local:Smart-Robotic-Arm/
 ~~~
 
 - 要在一台新树莓派上取远端版本，在**树莓派终端**执行下列命令。树莓派无法联网时也可用 U 盘复制完整 `Agents` 到同一目录，系统包、Python 依赖和可选语音模型仍须事先准备。
@@ -60,7 +61,9 @@ git clone https://github.com/cabeL001-cpu/Smart-Robotic-Arm.git "$HOME/Smart-Rob
 git -C "$HOME/Smart-Robotic-Arm" rev-parse --short HEAD
 ~~~
 
-**创建运行环境。** 除标明 Windows 的两行外，以下命令均在树莓派的 Bash 中执行。所有 `python -m ...` 命令都从 `Agents` 目录运行。项目和虚拟环境使用普通用户目录，标定与采集数据保存在仓库外。
+已有 Git 克隆时，用 `git -C "$HOME/Smart-Robotic-Arm" pull --ff-only` 更新。仅用 `scp` 复制了 `Agents` 的设备继续用文件复制更新。
+
+**创建运行环境。** 下文标为 PowerShell 的示例在 Windows 运行，其余部署命令使用树莓派的 Bash。所有 `python -m ...` 命令都从 `Agents` 目录运行。项目和虚拟环境使用普通用户目录，标定与采集数据保存在仓库外。
 
 ~~~bash
 cd "$HOME/Smart-Robotic-Arm/Agents"
@@ -94,11 +97,12 @@ PY
 ~~~bash
 python -m move go --ms 250 --dry-run
 python -m move.sonar --help
-python -m unittest -v arm.test_arm move.test_sonar vision.test_arm vision.test_robot move.imu.test_imu
+python -m unittest -v arm.test_arm move.test_sonar move.imu.test_imu vision.test_arm vision.test_robot vision.test_scan
+python -m vision.scan top --source vision/fixtures/printed-board.jpg --frames 1
 python -m vision.arm --source image-7.png --cell 4
 ~~~
 
-底盘预览输出 `GO 250`，超声波帮助列出 `scan` 与 `read`，单元测试应以 `OK` 结束。最后一条读取仓库中的棋盘示例图，图中没有末端标签，预期 `measurement` 为 `null`、`arrived` 为 `false`。机械臂的动作预览需要第 5.2 节的关节标定。
+底盘预览输出 `GO 250`，超声波帮助列出 `scan` 与 `read`。实拍棋盘样例应给出 `board_tags_used: 4`。最后一条读取旧模板，图中没有末端标签，预期 `measurement` 为 `null`、`arrived` 为 `false`。机械臂的动作预览需要第 5.2 节的关节标定。
 
 ## 3. 配对蓝牙、辨认 IMU 和摄像头
 
@@ -173,21 +177,22 @@ ls -l /dev/serial/by-id /dev/serial/by-path
 v4l2-ctl --list-devices
 ~~~
 
-把以下三行存入树莓派上的 `$CFG/devices.env`（例如用 `nano "$CFG/devices.env"`）。`UNO_PORT` 固定填蓝牙串口；**IMU 的示例值要换成刚查到的设备**，优先使用实机存在且唯一的 `/dev/serial/by-id/...` 链接。同型号 USB 芯片的标识重复时，可选 `by-path` 并固定 USB 插口。`CAM` 填数字，`/dev/video2` 对应 `2`。
+把已接设备的配置存入树莓派上的 `$CFG/devices.env`。`UNO_PORT` 填蓝牙串口，`IMU_PORT` 换成实际设备，优先使用唯一的 `/dev/serial/by-id/...` 链接；标识重复时可选 `by-path` 并固定 USB 插口。`CAM` 是下视相机，`FRONT_CAM` 只在接有前摄时填写。用 `ls -l /dev/v4l/by-id/` 核对示例中的设备名。
 
 ~~~bash
 export UNO_PORT=/dev/rfcomm0
 export IMU_PORT=/dev/ttyUSB0
-export CAM=0
+export CAM=/dev/v4l/by-id/usb-046d_C270_HD_WEBCAM_200901010001-video-index0
+export FRONT_CAM=/dev/v4l/by-id/usb-_Webcam_C170-video-index0
 ~~~
 
-加载设置，确认蓝牙串口存在、IMU 端口可用，摄像头列出视频采集格式，再读一帧验证取流。
+加载设置，确认蓝牙串口、IMU 端口和下视相机。只有下视相机的车也可用它完成第 6 节的末端测量和车体定位。
 
 ~~~bash
 source "$CFG/devices.env"
 ls -lL "$UNO_PORT" "$IMU_PORT"
 readlink -f "$UNO_PORT" "$IMU_PORT"
-v4l2-ctl -d "/dev/video$CAM" --list-formats-ext
+v4l2-ctl -d "$CAM" --list-formats-ext
 python - <<'PY'
 import os
 from contextlib import closing
@@ -199,15 +204,33 @@ with closing(frames(os.environ["CAM"], Mount())) as stream:
 PY
 ~~~
 
-记下实收分辨率及摄像头支持的其他尺寸。项目把数字 `--source` 作为实时相机，把文件名作为图片或录像。若实物是 CSI 排线相机，先确认本机 OpenCV 也能通过数字编号取到有效帧。当前采集入口使用 `cv2.VideoCapture`，没有 Picamera2 原生入口。[项目相机采集代码](vision/camera.py)
+车头另装前摄时，再单独验证其节点和围挡标签。
+
+~~~bash
+v4l2-ctl -d "$FRONT_CAM" --list-formats-ext
+python -m vision.scan front --source "$FRONT_CAM" --frames 10
+~~~
+
+记下实收分辨率及摄像头支持的其他尺寸。项目把数字编号与 V4L2 设备路径作为实时相机，把文件名作为图片或录像。若实物是 CSI 排线相机，先确认本机 OpenCV 也能通过数字编号取到有效帧。当前采集入口使用 `cv2.VideoCapture`，没有 Picamera2 原生入口。[项目相机采集代码](vision/camera.py)
 
 ## 4. 将合并固件烧录到 Uno
 
 `move/move.ino` 是入口，`move_func.ino` 保留轮控参数，`sonar.cpp`、`sonar.h` 负责四向避障，`arm_control.ino` 和 `arm_limits.h` 执行两轴脉宽限位。编译整个 `move` 目录。已完成第 5.2 节标定时先导出限位头文件，否则默认固件仅锁定舵机，仍可验收避障。烧录时四轮架空、负载电源关闭。
 
-**烧录前必须把 HC-05 从扩展板蓝牙座上拔下**（或断开模块的 5V），因为板载 USB 串口芯片和 HC-05 共用 D0/D1，同时在线会互相干扰。烧录完成、拔掉 USB 后，再把模块插回。
+**断电拔下 HC-05，再用 USB 将 Uno 接到烧录机。** 板载 USB 串口和 HC-05 共用 D0/D1。关闭串口监视器，让 Arduino CLI 独占烧录口。上传校验通过后拔掉 USB，断电插回 HC-05，再恢复车载供电。
 
-**用电脑上的 Arduino IDE。** 打开 `Agents/move/move.ino`，确认同一草图中有上述三个文件。安装支持 `Wire.setWireTimeout` 的 **Arduino AVR Boards**（已测试 1.8.8）和 Arduino 的 **Servo** 库，选择 **Arduino Uno** 与烧录用 USB 的实际 COM 口。先“验证”再“上传”完整草图，看到上传成功后关闭串口监视器、拔除烧录线，把 HC-05 插回蓝牙座，再在树莓派上运行 `sh bt_link.sh bind` 恢复 `/dev/rfcomm0`。[Arduino Uno R3 板卡资料](https://docs.arduino.cc/hardware/uno-rev3/)
+**Windows PowerShell 快速烧录。** 从最新克隆的仓库根目录执行。CLI 首次使用时先运行 `arduino-cli core update-index`、`arduino-cli core install arduino:avr` 和 `arduino-cli lib install Servo`。若 CLI 未加入 PATH，用 `& 'arduino-cli.exe 的完整路径'` 调用。若要启用舵机，先从本车实测标定导出 `move/arm_limits.h`。仅验证四轮和超声波时可使用仓库的默认限位。
+
+~~~powershell
+Set-Location .\Agents
+arduino-cli board list
+$flashPort = Read-Host '输入列表中 Uno 的 USB 端口（例如 COM14）'
+arduino-cli compile --fqbn arduino:avr:uno --port $flashPort --upload --verify .\move
+~~~
+
+若看到 `not in sync`，先核对实际 USB 端口、HC-05 是否已拔下，以及串口监视器是否已关闭。用可传数据的 USB 线重新连接，重新执行 `board list` 后再上传。CLI 成功退出并通过写入校验后，在树莓派运行 `sh bt_link.sh bind` 和 `python -m move stop` 验证运行链路。
+
+**Arduino IDE。** 打开 `Agents/move/move.ino`，安装支持 `Wire.setWireTimeout` 的 Arduino AVR Boards（已测试 1.8.8）及 Servo 库。选择 Arduino Uno 和烧录用 USB 端口，验证并上传完整草图。[Arduino Uno R3 板卡资料](https://docs.arduino.cc/hardware/uno-rev3/)
 
 **也可在树莓派用 Arduino CLI。** 以下命令用 Arduino 官方安装脚本按系统架构下载 CLI，安装到当前用户的 `~/.local/bin`。已有 CLI 时可从 `arduino-cli version` 开始。编译结果写入临时目录，上传时使用同一目录。烧录期间 Uno 仍要接 USB、HC-05 要拔下，所以上传端口用 `FLASH_PORT`（这次 USB 烧录口），**不能用 `$UNO_PORT` 的蓝牙地址**；`move` 指当前 `Agents` 目录下的草图。上传完成后拔线，运行时继续用 `UNO_PORT`。[CLI 安装](https://docs.arduino.cc/arduino-cli/installation/) · [官方安装脚本](https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh) · [CLI 编译与上传](https://docs.arduino.cc/arduino-cli/getting-started/)
 
@@ -225,7 +248,7 @@ arduino-cli board list
 UNO_BUILD=$(mktemp -d)
 arduino-cli compile --fqbn arduino:avr:uno --build-path "$UNO_BUILD" move
 read -r -p "请输入 board list 中的 Uno USB 烧录端口 " FLASH_PORT
-arduino-cli upload --fqbn arduino:avr:uno --port "$FLASH_PORT" --input-dir "$UNO_BUILD" move
+arduino-cli upload --fqbn arduino:avr:uno --port "$FLASH_PORT" --input-dir "$UNO_BUILD" --verify move
 ~~~
 
 ## 5. 分别验收四轮和机械臂
@@ -259,11 +282,11 @@ python -m move m4 --ms 200 --port "$UNO_PORT"
 
 每轴只能从最大轴位退回 90°，软件默认在两端各留 3°。肩部实物照片记录了机械止挡姿态，斜拍图不能确定控制脉宽。肘部单独标定。按机械臂文档中的步骤，测出两轴的几何角、退回方向和行程内两个已知脉宽点，将标定存为 `$CFG/arm.json`。当关节在止挡处卡住时，先支撑臂、断开舵机电源并卸载，避免强扳或通电顶住机构。[标定表、测量方法与计算公式](arm/README.md)
 
-在要烧录的那份 `Agents` 源码中执行下面的命令。第一条用实测数据检查两关节能否到达 4 号格。第二条导出 Uno 独立执行的脉宽上下界。然后按第 4 节重新编译并上传，拔下烧录线，再通过蓝牙调试。改变舵盘安装位置或脉宽标定时需要重新导出、烧录。
+在要烧录的那份 `Agents` 源码中，先把两轴实测限位导出到固件。第二条可选，用于预览当前配置下的 4 号格。随后按第 4 节重新编译并上传，拔下烧录线，再通过蓝牙调试。改变舵盘安装位置或脉宽标定时需要重新导出、烧录。
 
 ~~~bash
-python -m arm --config "$CFG/arm.json" --cell 4 --dry-run
 python -m arm --config "$CFG/arm.json" --export-limits move/arm_limits.h
+python -m arm --config "$CFG/arm.json" --cell 4 --dry-run
 ~~~
 
 从旧 D7 接线升级时，断电将肘部信号线移至 D10，按第 4 节上传新版完整草图。只改信号线可沿用原实测标定。首次点动将肩角设为当前实测角，选择一个邻近当前肘角且远离端点的肘角，先预览，再运行。旧配置缺少 `angle_at_max_deg` 时需补全，默认固件对 `ARM` 返回 `ERR ARM CALIBRATION`。格心不可达时，重新选择停靠位。`OK ARM` 仅表示两路脉宽已设置，实际到位用第 6 节的相机确认。
@@ -274,11 +297,13 @@ python -m arm --joints "$Q1" "$Q2" --config "$CFG/arm.json" --dry-run
 python -m arm --joints "$Q1" "$Q2" --config "$CFG/arm.json" --port "$UNO_PORT"
 ~~~
 
-## 6. 一台随车相机完成两种定位
+## 6. 顶摄定位与前摄墙标识别
+
+顶摄与前摄可同时工作。前摄用第 3.2 节的命令检查 36h11 墙标 1–4。顶摄完成下列标定后，可用 `python -m vision.scan top --source "$CAM" --config "$CFG/mount.json" --frames 10` 查看每个棋盘角标的编号和坐标。[双相机验收与实物角标说明](vision/README.md)
 
 ### 6.1 安装棋盘和末端标签
 
-- 九宫格平整固定在场地。实测外边长应为 **200 × 200 mm**。棋盘坐标原点在左下，向右为 +X，向上为 +Y。四角用 **tag36h11**，左下 ID 0、右下 ID 1、左上 ID 2、右上 ID 3。每个标签黑边外沿边长 **20 mm**，朝向与模板一致。图中格号从左下 0 排到右上 8，4 号中心是棋盘坐标 `(100, 100) mm`。用尺检查印后尺寸，仓库里的示意截图本身不保证打印比例。[棋盘布局](image-7.png)
+- 九宫格平整固定在场地。实测外边长应为 **200 × 200 mm**。棋盘坐标原点在左下，向右为 +X，向上为 +Y。实物印刷板四角为 5×5 图案（黑框约 15 mm），旧模板为 tag36h11（黑框 20 mm）。两版均按左下 0、右下 1、左上 2、右上 3 映射。图中格号从左下 0 排到右上 8，4 号中心是棋盘坐标 `(100, 100) mm`。用尺检查印后尺寸，仓库里的示意截图本身不保证打印比例。[棋盘布局](image-7.png)
 - 末端默认用 **tag36h10 / ID 100**，固定在末端、码面朝上并平行于棋盘。将车停到作业位，用实际镜头检查对焦、曝光和遮挡。要测量末端，画面须同时检出至少两个棋盘角标与末端标签。约 1.5 m 高度下，应以实收画面中能稳定识别小标签的分辨率进行标定。
 - 用 `nano "$CFG/mount.json"` 保存下面的配置。`image_size` 改为摄像头确实支持的宽、高。`height_mm` 从镜头中心量到棋盘平面，`tip_height_mm` 从棋盘面量到末端标签面。`tip_offset_mm` 是标签中心到实际指尖沿标签自身“向右、向上”的毫米偏移量。`0` 只适用于相应的高度差或偏移确实为零时。
 
@@ -320,7 +345,7 @@ python -m vision.robot --source "$CAM" --config "$CFG/rig.json" \
 python -m vision.robot --source "$CAM" --config "$CFG/vehicle.json" --cell 4
 ~~~
 
-将车移到第二个实测点，改变朝向，对比 `pose.x_m`、`pose.y_m`、`pose.yaw_rad` 与尺量结果。输出角度为**弧度**，逆时针 90° 约为 `+1.57`。`--cell 4` 会同时输出同一帧的 `arm` 观测，可用于仅有一个摄像头时的联合测量。场地摆法变了，用 `--field` 指向实测的场地 JSON，标定车体、读取车体位姿及后续融合时都使用同一文件。下视视野看不到固定参照时，`pose` 会为 `null`。需要扩大覆盖时，现有代码可读额外的已测量地面标签。墙面标签仅在实际入镜且有内参及标签安装高度时可用。[场地布局](image-2.png) · [场地配置字段与示例](vision/README.md)
+将车移到第二个实测点，改变朝向，对比 `pose.x_m`、`pose.y_m`、`pose.yaw_rad` 与尺量结果。输出角度为**弧度**，逆时针 90° 约为 `+1.57`。`--cell 4` 会同时输出同一帧的 `arm` 观测，可用于顶摄联合测量。场地摆法变了，用 `--field` 指向实测的场地 JSON，标定车体、读取车体位姿及后续融合时都使用同一文件。下视视野看不到固定参照时，`pose` 会为 `null`。需要扩大覆盖时，现有代码可读额外的已测量地面标签。墙面标签仅在实际入镜且有内参及标签安装高度时可用。[场地布局](image-2.png) · [场地配置字段与示例](vision/README.md)
 
 **闭环驱动机械臂。** 结束占用摄像头和 Uno 的其他命令，停稳底盘，确认当前位置的目标格在机械臂可达范围内。下面的命令同时使用舵机和相机标定。若只部署机械臂，可在 `--config` 处直接使用第 6.2 节生成的 `rig.json`。
 
@@ -361,6 +386,17 @@ python -m vision.robot --source "$CAM" --config "$CFG/vehicle.json" --cell 4 \
 python -m move.imu --replay "$RUN/imu-raw.csv" --fixes "$RUN/vision.jsonl" \
   --origin 0 0 0 --mount-yaw 0
 ~~~
+
+### 7.1 运行 A/B/C/D 和坐标导航
+
+部署支持 `NAV` 指令的本版完整 Uno 固件。分别保存 `$CFG/navigation/field.json`、`front.json` 和 `nav.json`，测量墙标地图、前摄内外参、起点与六向运动速率。四向净空读数正常后结束各串口与相机的独立读取程序。导航会话会独占这三台设备。[逐项标定及验收方法](move/CALIBRATION.md)
+
+~~~bash
+source "$CFG/devices.env"
+python -m move.navigation --config "$CFG/navigation/nav.json" --dock A B C D
+~~~
+
+同一命令的四段行程共用启动原点。遇障或探头缺测时 Uno 锁停，移开障碍后仍保持停车。人工确认四面有效且畅通后，`python -m move.navigation --reset-lock` 解除锁存。再次出发时按当前起姿重新建系。[任意坐标与异常接口](API.md)
 
 ## 8. 可选语音部署
 
@@ -425,7 +461,7 @@ config.LLM_API_KEY = getpass("API Key ")
 print(listen())'
 ~~~
 
-说“请到九宫格四号位置”，期望返回 `('4', 'arrive')`，空指令等情况返回 `(None, None)`。当前语音分类支持格号 0–8。部署完成后，车轮点动、机械臂到格、车体定位及语音解析都有独立入口。将口令转换成 A/B/C/D 自动行驶还需要上层导航与调度。[语音接口](listen_speak/__init__.py) · [系统接口说明](README.md)
+说“请到九宫格四号位置”，期望返回 `('4', 'arrive')`，空指令等情况返回 `(None, None)`。当前语音分类支持格号 0–8。A/B/C/D 可从命令行指定，或由调用方将 `('A','arrive')` 和导航会话传给 `MHS.dispatch`。[语音接口](listen_speak/__init__.py) · [系统接口手册](API.md)
 
 ## 9. 下次开机与故障定位
 
