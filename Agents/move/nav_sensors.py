@@ -125,9 +125,9 @@ def open_imu(port, calibration_s, mount_yaw_deg):
             yield reader
 
 
-class FrontFrames(_Reader):
-    def __init__(self):
-        super().__init__("前摄")
+class CameraFrames(_Reader):
+    def __init__(self, name):
+        super().__init__(name)
         self.latest = None
 
     def capture(self, source, mount):
@@ -149,13 +149,16 @@ class FrontFrames(_Reader):
         with self.cv:
             self.check()
             if self.latest is None or monotonic() - self.latest[0] >= .5:
-                raise TimeoutError("前摄采集中断或帧已过期")
+                raise TimeoutError(f"{self.name}采集中断或帧已过期")
 
 
 @contextmanager
-def open_front(source, mount):
+def open_camera(source, mount, name="前摄"):
     if not live_source(source):
-        raise ValueError("实际导航须使用实时前摄设备，图片和录像可用 vision.front 读取")
-    reader = FrontFrames()
+        raise ValueError(f"实际导航须使用实时{name}设备")
+    reader = CameraFrames(name)
     with reader.running(lambda: reader.capture(source, mount)):
         yield reader
+
+
+open_front = open_camera
