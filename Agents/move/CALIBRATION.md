@@ -193,6 +193,27 @@ python -m move "$ACT" --ms "$MS" --port "$UNO_PORT"
 
 ## 7. 现场运行与验收
 
+### 绕板与棋盘作业位
+
+`nav.json` 的 `board_approach` 以 30 cm 方板、34 cm × 34 cm 底盘、南侧 50 cm 预靠点为初始设置。板与格线应同心同向，地图的 `board_origin_mm` 仍填写 20 cm 格线的左下角。确认轮子、支架与收拢的机械臂的实际外廓，把制动距离和定位余量计入 `clearance_m`。现有配置加入这个区块后，A/B/C/D 和坐标导航也绕开固定板。原地扫标签前需要留出车角转动净空。
+
+从 `Agents` 运行离线规划。未填实测 `work_distance_m` 时，预览只给出预靠路径，作业位为 `null`。
+
+```sh
+python -m move.navigation --board --dry-run --from-field 1.0 1.6
+```
+
+先手摆测试车心距棋盘中心 50、45 和 40 cm 时的净空、角标识别和机械臂可达性。将确认的车心距离（米）填入 `work_distance_m`。默认 `heading_deg=90` 使车头指向棋盘。如果从车身侧面作业，按实际车头方向选 0 或 180，最后一段会按车体系换算为横移。用已知车心及朝向通过 `vision.robot --calibrate … --save-mount …` 标定下视相机。前摄和下视必须使用不同设备。
+
+```sh
+python -m move.navigation --config "$NAVCFG/nav.json" --board \
+  --top-config "$CFG/rig.json" --top-source /dev/video2
+```
+
+到预靠点后才调航向。最后以短步平移并停车取新帧，稳定观测到作业位才返回到达结果。已建立棋盘观测后失标会停车退出。同一导航会话从作业位发起下一次坐标任务时，先保持航向退回预靠点。
+
+### 停靠点与坐标验收
+
 先让车心和车头精确对好地面标线。选择有净空的短程坐标，之后逐个 A、B、C、D，最后连续运行。以下每条 CLI 命令会新建启动零点。使用已知起点模式时，每次独立启动都要使车体起姿与配置一致。需要保留同一零点时，用一次 `--dock A B C D` 或同一个 Python 会话。
 
 ~~~bash

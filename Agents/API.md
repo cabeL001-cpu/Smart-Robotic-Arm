@@ -52,7 +52,9 @@ python -m move.navigation --config "$CFG/navigation/nav.json" --xy 0.40 0.10 --f
 python -m move.navigation --reset-lock --uno-port "$UNO_PORT"
 ~~~
 
-`--dock`、`--xy`、`--reset-lock` 三选一。`--uno-port`、`--imu-port`、`--front-source` 可覆盖设备环境变量。默认 `--frame start` 只解释 `--xy`。每条独立 CLI 命令均新建会话；已知起点模式应在配置给定的起姿开机。`--dock A B C D` 在一次会话中执行，首个失败就退出。`MotionBlocked` 是 `OSError` 子类，含第一个阻挡方向；超时为 `TimeoutError`，无法形成定位共识、无进展为 `RuntimeError`，标定或坐标错误为 `ValueError`。见[地图、运动参数、容差和恢复流程](move/CALIBRATION.md)。
+`--dock`、`--xy`、`--board`、`--reset-lock` 四选一。`--uno-port`、`--imu-port`、`--front-source` 可覆盖设备环境变量。默认 `--frame start` 只解释 `--xy`。每条独立 CLI 命令均新建会话；已知起点模式应在配置给定的起姿开机。`--dock A B C D` 在一次会话中执行，首个失败就退出。`MotionBlocked` 是 `OSError` 子类，含第一个阻挡方向；超时为 `TimeoutError`，无法形成定位共识、无进展为 `RuntimeError`，标定或坐标错误为 `ValueError`。见[地图、运动参数、容差和恢复流程](move/CALIBRATION.md)。
+
+`nav.go_to_board(top_config=..., top_source=...)` 读取 `nav.json` 的 `board_approach` 参数，绕到预靠点并朝向棋盘作业侧，最后返回下视相机确认的 `Arrival`。CLI 使用 `--board --top-config ... --top-source ...`，可用 `TOP_CAM` 提供默认设备。进入工位后可通过 `nav.shared_link()` 顺序操作机械臂。
 
 ## 2. 手动底盘、测距与共享串口
 
