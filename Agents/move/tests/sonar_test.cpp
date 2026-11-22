@@ -33,17 +33,17 @@ bool stopped() {
 }
 
 int main() {
-  const uint8_t addresses[] = {0x69, 0x72, 0x6C, 0x6A};
+  const uint8_t addresses[] = {0x6C, 0x72, 0x6F, 0x6A};
   const char *const sides[] = {"FRONT", "BACK", "LEFT", "RIGHT"};
   for (auto a : addresses) Wire.probes[a].online = true;
   setup();
   assert(command("GO 1000") == "ERR SONAR FRONT\n" && stopped());
-  assert(command("SONAR SCAN") == "SCAN 0x69 0x72 0x6C 0x6A\n");
+  assert(command("SONAR SCAN") == "SCAN 0x6C 0x72 0x6F 0x6A\n");
   tick(1500);
   assert(command("STOP") == "OK STOP\n");
-  assert(command("SONAR") == "SONAR 0x69=NA 0x72=NA 0x6C=NA 0x6A=NA\n");
+  assert(command("SONAR") == "SONAR 0x6C=NA 0x72=NA 0x6F=NA 0x6A=NA\n");
   tick(1450);
-  assert(command("SONAR") == "SONAR 0x69=1000 0x72=1000 0x6C=1000 0x6A=1000\n");
+  assert(command("SONAR") == "SONAR 0x6C=1000 0x72=1000 0x6F=1000 0x6A=1000\n");
   assert(command("GO 500") == "OK MOVE\n" && !stopped());
   assert(command("SONAR SCAN") == "ERR BUSY\n");
   assert(command("BACK 50") == "ERR BUSY\n");
@@ -60,7 +60,7 @@ int main() {
   };
   for (int i = 0; i < 4; ++i) {
     Wire.probes[addresses[i]].distance = sonar::STOP_MM;
-    tick(500);
+    tick(1000);  // 四路一轮约 0.8 s，等满一轮让新距离进入缓存
     for (const auto &motion : motions) {
       std::string reply = command(motion.name);
       if (motion.mask & (1 << i)) {
@@ -73,38 +73,38 @@ int main() {
     }
     Wire.probes[addresses[i]].distance = 1000;
   }
-  tick(500);
+  tick(1000);
   assert(command("GO 5000") == "OK MOVE\n");
-  Wire.probes[0x69].distance = 210;
-  tick(500);
+  Wire.probes[0x6C].distance = 210;
+  tick(1000);
   assert(output() == "ERR OBSTACLE FRONT 210\n" && stopped());
-  Wire.probes[0x69].distance = 1234;
+  Wire.probes[0x6C].distance = 1234;
   tick(5200);
   assert(output().empty() && stopped());  // 不自启，也不补发 DONE
   assert(command("GO 4000") == "OK MOVE\n");
-  Wire.probes[0x69].online = false;
-  tick(500);
+  Wire.probes[0x6C].online = false;
+  tick(1000);
   assert(output() == "ERR SONAR FRONT\n" && stopped());
-  assert(command("SONAR SCAN") == "SCAN 0x72 0x6C 0x6A\n");
+  assert(command("SONAR SCAN") == "SCAN 0x72 0x6F 0x6A\n");
   assert(command("BACK 10") == "OK MOVE\n");
   tick(10);
   assert(output() == "DONE\n");
-  Wire.probes[0x69].online = true;
-  tick(3100);
-  assert(command("SONAR").find("0x69=1234") != std::string::npos);
-  Wire.probes[0x69].replyBytes = 1;
-  tick(600);
+  Wire.probes[0x6C].online = true;
+  tick(3500);  // 2 s 预热 + 一轮轮询回到本探头
+  assert(command("SONAR").find("0x6C=1234") != std::string::npos);
+  Wire.probes[0x6C].replyBytes = 1;
+  tick(1000);
   assert(command("GO 10") == "ERR SONAR FRONT\n");
-  Wire.probes[0x69].replyBytes = 2;
+  Wire.probes[0x6C].replyBytes = 2;
   for (uint16_t bad : {0, 6000, 65535}) {
-    Wire.probes[0x69].distance = bad;
+    Wire.probes[0x6C].distance = bad;
     tick(3100);
     assert(command("GO 10") == "ERR SONAR FRONT\n");
   }
-  Wire.probes[0x69].distance = sonar::STOP_MM + 1;
-  tick(500);
+  Wire.probes[0x6C].distance = sonar::STOP_MM + 1;
+  tick(1000);
   assert(command("GO 5000") == "OK MOVE\n");
-  clockMs += 700;  // 即使旧读数显示畅通，采样中断后也应停车
+  clockMs += 1600;  // 超过 1500 ms 新鲜度，即使旧读数显示畅通也应停车
   loop();
   assert(output() == "ERR SONAR FRONT\n" && stopped());
 
@@ -118,7 +118,7 @@ int main() {
     assert(joints(SHOULDER_MIN_US - 1, ELBOW_MIN_US) == "ERR ARM\n");
     assert(!shoulderServo.active && !elbowServo.active);
     assert(joints(SHOULDER_MIN_US, ELBOW_MAX_US) == "OK ARM\n");
-    assert(shoulderServo.signalPin == 13 && elbowServo.signalPin == 10);
+    assert(shoulderServo.signalPin == 18 && elbowServo.signalPin == 10);
     assert(shoulderServo.pulse == SHOULDER_MIN_US && elbowServo.pulse == ELBOW_MAX_US);
     assert(joints(SHOULDER_MAX_US, ELBOW_MAX_US + 1) == "ERR ARM\n");
     assert(shoulderServo.pulse == SHOULDER_MIN_US && elbowServo.pulse == ELBOW_MAX_US);

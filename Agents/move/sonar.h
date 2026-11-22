@@ -5,6 +5,7 @@ namespace sonar {
 // 按车体坐标命名，斜移同时检查两个方向，转动时检查四面。
 enum Direction : uint8_t { FRONT = 1, BACK = 2, LEFT = 4, RIGHT = 8, ALL = 15 };
 constexpr uint16_t STOP_MM = 300;  // 初始值，按实测车速、轮询周期和制动距离调整
+extern bool avoidanceEnabled;      // false 时四轮运动不再因测距缺失或过近而判停
 
 void begin();
 void poll();

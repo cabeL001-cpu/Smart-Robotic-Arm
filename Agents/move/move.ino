@@ -158,6 +158,12 @@ void handleCommand(char *line) {
     sonar::handleCommand(line, motionDurationMs != 0);
   } else if (strncmp(line, "ARM ", 4) == 0) {
     setArmPulses(line + 4);
+  } else if (strcmp(line, "AVOID OFF") == 0) {
+    sonar::avoidanceEnabled = false;
+    Serial.println(F("OK AVOID OFF"));
+  } else if (strcmp(line, "AVOID ON") == 0) {
+    sonar::avoidanceEnabled = true;
+    Serial.println(F("OK AVOID ON"));
   } else handleMotion(line);
 }
 

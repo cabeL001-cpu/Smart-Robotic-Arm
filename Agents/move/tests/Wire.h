@@ -16,7 +16,7 @@ struct TestWire {
   uint32_t lastPing = 0;
 
   void begin() {}
-  void setWireTimeout(uint32_t us, bool reset) { assert(us == 10000 && reset); }
+  void setWireTimeout(uint32_t us, bool reset) { assert(us == 50000 && reset); }
   void beginTransmission(uint8_t a) { address = a; tx.clear(); }
   void write(uint8_t v) { tx.push_back(v); }
   int endTransmission() {

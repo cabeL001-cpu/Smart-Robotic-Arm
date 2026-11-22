@@ -6,11 +6,11 @@
 namespace sonar {
 namespace {
 // 实车探头标签，顺序与 Direction 的四个掩码位一致。
-constexpr uint8_t ADDRESS[] = {0x69, 0x72, 0x6C, 0x6A};
+constexpr uint8_t ADDRESS[] = {0x6C, 0x72, 0x6F, 0x6A};
 constexpr uint8_t COUNT = sizeof(ADDRESS) / sizeof(ADDRESS[0]);
 const char *const NAMES[] = {"FRONT", "BACK", "LEFT", "RIGHT"};
 constexpr uint8_t REG = 0x02;
-constexpr uint16_t FRESH_MS = 650;  // 正常四路轮询约 432 ms
+constexpr uint16_t FRESH_MS = 1500;  // 四路轮询一轮约 1 s，留出丢包重试和调度抖动的余量
 
 enum Power { COLD, WARMING, READY };
 struct Probe {
@@ -52,10 +52,14 @@ void printAddress(uint8_t i) {
 }
 }  // namespace
 
+bool avoidanceEnabled = true;  // 缺测/过近判停开关；false 用于架空点动验收底盘
+
 void begin() {
   nextMs = millis();
   Wire.begin();
-  Wire.setWireTimeout(10000, true);  // 一次总线事务最多等待约 10 ms
+  // 参数单位是微秒。SR09 选寄存器时会一直拉住 SCL，直到超时复位总线才放行；
+  // 实测 50 ms 足够，随后等 100 ms 再读即可拿到两个字节。
+  Wire.setWireTimeout(50000, true);
 }
 
 void poll() {
@@ -88,12 +92,11 @@ void poll() {
   }
 
   if (phase == SELECT_REGISTER) {
-    if (!writeRegister()) {
-      busFailure();
-      return;
-    }
+    // 选寄存器这次写必然超时：SR09 会拉住 SCL 直到超时复位总线。写的结果不判故障，
+    // 复位后再等 100 ms 让探头就绪，然后以读出长度判定本次测量是否成功。
+    writeRegister();
     phase = READ_ECHO;
-    nextMs = millis() + 10;
+    nextMs = millis() + 100;
     return;
   }
 
@@ -109,6 +112,7 @@ void poll() {
 }
 
 int8_t blockedDirection(uint8_t mask) {
+  if (!avoidanceEnabled) return -1;
   for (uint8_t i = 0; i < COUNT; ++i) {
     if ((mask & (1 << i)) && freshMm(i) <= STOP_MM) return i;
   }
