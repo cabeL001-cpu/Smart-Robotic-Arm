@@ -14,4 +14,5 @@ struct Servo {
     active = true;
   }
   void writeMicroseconds(int us) { assert(active); pulse = us; }
+  void detach() { active = false; }
 };

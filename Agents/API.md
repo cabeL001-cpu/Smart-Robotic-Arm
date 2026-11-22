@@ -52,7 +52,9 @@ python -m move.navigation --config "$CFG/navigation/nav.json" --xy 0.40 0.10 --f
 python -m move.navigation --reset-lock --uno-port "$UNO_PORT"
 ~~~
 
-`--dock`、`--xy`、`--reset-lock` 三选一。`--uno-port`、`--imu-port`、`--front-source` 可覆盖设备环境变量。默认 `--frame start` 只解释 `--xy`。每条独立 CLI 命令均新建会话；已知起点模式应在配置给定的起姿开机。`--dock A B C D` 在一次会话中执行，首个失败就退出。`MotionBlocked` 是 `OSError` 子类，含第一个阻挡方向；超时为 `TimeoutError`，无法形成定位共识、无进展为 `RuntimeError`，标定或坐标错误为 `ValueError`。见[地图、运动参数、容差和恢复流程](move/CALIBRATION.md)。
+`--dock`、`--xy`、`--board`、`--reset-lock` 四选一。`--uno-port`、`--imu-port`、`--front-source` 可覆盖设备环境变量。默认 `--frame start` 只解释 `--xy`。每条独立 CLI 命令均新建会话；已知起点模式应在配置给定的起姿开机。`--dock A B C D` 在一次会话中执行，首个失败就退出。`MotionBlocked` 是 `OSError` 子类，含第一个阻挡方向；超时为 `TimeoutError`，无法形成定位共识、无进展为 `RuntimeError`，标定或坐标错误为 `ValueError`。见[地图、运动参数、容差和恢复流程](move/CALIBRATION.md)。
+
+`nav.go_to_board(top_config=..., top_source=...)` 读取 `nav.json` 的 `board_approach` 参数，绕到预靠点并朝向棋盘作业侧，最后返回下视相机确认的 `Arrival`。CLI 使用 `--board --top-config ... --top-source ...`，可用 `TOP_CAM` 提供默认设备。进入工位后可通过 `nav.shared_link()` 顺序操作机械臂。
 
 ## 2. 手动底盘、测距与共享串口
 
@@ -61,8 +63,8 @@ python -m move.navigation --reset-lock --uno-port "$UNO_PORT"
 | `MHS.open_uno(port=DEFAULT_PORT)` | `with MHS.open_uno() as link: ...`。以 9600、8N1 独占打开 Uno 串行端点，重发 `STOP` 至 `OK STOP`，退出时关闭。`DEFAULT_PORT` 在导入时读取 `UNO_PORT`，缺省为 `/dev/rfcomm0`。 |
 | `MHS.move(action, duration_ms=1000, *, port=DEFAULT_PORT, link=None, guarded=False)` | `action` 见下表。`duration_ms` 为 1–65535 的整数毫秒，`stop` 忽略时长。`link` 可传已握手连接，否则自行打开 `port`。成功停车后返回 `None`。`guarded=True` 用于已处于 `NAV BEGIN` 的会话，向固件发送带导航前缀的动作。 |
 | `move.encode_command(action, duration_ms=1000)` | 只做动作和时长校验，返回带换行的 ASCII `bytes`，例如 `b"GO 250\n"`。 |
-| `move.sonar.scan(link)` | 停车时扫描四个预设七位地址，返回实际应答的 `list[int]`。顺序为前 0x69、后 0x72、左 0x6C、右 0x6A。 |
-| `move.sonar.read(link)` | 返回 `front/back/left/right` 字典，每项形如 `{"address":"0x69","mm":412}`。缺测和过期时 `mm=None`，没有有效距离不表示方向畅通。 |
+| `move.sonar.scan(link)` | 停车时扫描四个预设七位地址，返回实际应答的 `list[int]`。顺序为前 0x6C、后 0x72、左 0x6F、右 0x6A。 |
+| `move.sonar.read(link)` | 返回 `front/back/left/right` 字典，每项形如 `{"address":"0x6C","mm":412}`。缺测和过期时 `mm=None`，没有有效距离不表示方向畅通。 |
 | `uno.stop_wheels(link)`、`uno.wait_reply(link, expected, seconds=1, *, fields=False)` | 前者发停车指令并等待确认。后者等待 `expected` 字节串；普通成功返回 `None`，`fields=True` 时接受同前缀和空格分隔的字段并返回完整行。阻挡、意外回执、超时均抛出异常。 |
 
 | 动作名 | 含义 |
@@ -74,7 +76,7 @@ python -m move.navigation --reset-lock --uno-port "$UNO_PORT"
 | `m1`、`m2`、`m3`、`m4` | 对应扩展板电机座单轮正转 |
 | `stop` | 四轮停车。保持舵机已有输出，保留导航锁存 |
 
-从 `Agents` 运行 `python -m move ACTION [--ms 毫秒] [--port 端口] [--dry-run]`。`--dry-run` 只打印指令。`python -m move.go_one_second` 实际请求前进 1000 ms。`python -m move.sonar scan` 扫描，`python -m move.sonar read [--watch] [--port 端口]` 读取；`--watch` 每 0.25 秒打印一次。`sh bt_link.sh bind [MAC或模块名]` 建立蓝牙串口节点，`status` 查状态，`release` 释放绑定。可设 `BT_NAME`、`BT_DEV`、`BT_CHANNEL`，默认分别为 `sjtu006`、`rfcomm0`、`1`。[底盘协议和接线](move/README.md) · [蓝牙配置](BLUETOOTH_WORKFLOW.md)
+从 `Agents` 运行 `python -m move [ACTION] [--ms 毫秒] [--port 端口] [--dry-run] [--avoid on|off]`。`--dry-run` 只打印指令；只给 `--avoid` 时可切换固件避障开关。`python -m move.go_one_second` 实际请求前进 1000 ms。`python -m move.sonar scan` 扫描，`python -m move.sonar read [--watch] [--port 端口]` 读取；`--watch` 每 0.25 秒打印一次。`sh bt_link.sh bind [MAC或模块名]` 建立蓝牙串口节点，`status` 查状态，`release` 释放绑定。可设 `BT_NAME`、`BT_DEV`、`BT_CHANNEL`，默认分别为 `sjtu006`、`rfcomm0`、`1`。[底盘协议和接线](move/README.md) · [蓝牙配置](BLUETOOTH_WORKFLOW.md)
 
 ### Uno 线上协议
 
@@ -84,7 +86,8 @@ python -m move.navigation --reset-lock --uno-port "$UNO_PORT"
 | --- | --- | --- |
 | `STOP` | `OK STOP` | 所有模式均可停车，停车不解锁。 |
 | `GO 250` 等手动动作 | `OK MOVE`，自然到时 `DONE` | 手动模式按动作所需方向检查；已锁存时所有车轮动作被拒绝。 |
-| `SONAR`、`SONAR SCAN` | `SONAR 0x69=... ...`、`SCAN ...` | 快照中 `NA` 为无有效回波。地址扫描仅在停车时执行。 |
+| `SONAR`、`SONAR SCAN` | `SONAR 0x6C=... ...`、`SCAN ...` | 快照中 `NA` 为无有效回波。地址扫描仅在停车时执行。 |
+| `AVOID ON`、`AVOID OFF` | `OK AVOID ON`、`OK AVOID OFF` | 运行时切换避障判停，`OFF` 供架空点动或位移验收使用；重新上电恢复为开启。 |
 | `ARM 肩脉宽 肘脉宽` | `OK ARM` | 微秒整数。缺标定返回 `ERR ARM CALIBRATION`，越界返回 `ERR ARM`，两路都通过才更新。 |
 | `NAV BEGIN`、`NAV CHECK` | `OK NAV BEGIN`、`OK NAV CHECK` | 前者在停车时布防，后者确认保护仍在。整段会话含停车等待期间均检查四面。 |
 | `NAV MOVE GO 200` 等 | `OK MOVE` 后 `DONE`，或阻挡错误 | 仅接受已布防会话，Uno 复位后收到旧动作会回复 `ERR NAV INACTIVE`。 |

@@ -48,3 +48,12 @@ def move(action: str, duration_ms: int = DEFAULT_DURATION_MS, *, port: str = DEF
             with suppress(OSError):
                 stop_wheels(connection)
             raise
+
+
+def avoidance(on: bool, *, port: str = DEFAULT_PORT, link=None) -> None:
+    """切换固件避障开关。on=False 关闭避障，用于架空的点动或位移验收。"""
+    command = b"AVOID ON\n" if on else b"AVOID OFF\n"
+    expected = b"OK AVOID ON" if on else b"OK AVOID OFF"
+    with (nullcontext(link) if link is not None else open_uno(port)) as connection:
+        connection.write(command)
+        wait_reply(connection, expected)

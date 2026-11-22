@@ -6,10 +6,12 @@ from dataclasses import asdict, dataclass
 import json
 import math
 import os
+from pathlib import Path
 from threading import Lock
 from time import monotonic
 
 from . import DEFAULT_PORT, move, open_uno, stop_wheels, wait_reply
+from .board_route import BoardApproach, BoardRoute
 from .imu import rotate, wrap
 from .nav_config import NavigationConfig, Origin
 
@@ -70,6 +72,12 @@ class Navigator:
         self.last_frame = self.settled_at = monotonic()
         self.halted = False
         self._task = Lock()
+        self.board = (BoardRoute(config.board_approach, field.bounds_m,
+                                 field.board_origin_mm, field.board_yaw_deg)
+                      if config.board_approach is not None else None)
+        self._parked_at_board = False
+        self._route_goal = None
+        self._route_points = []
 
     def _check(self, deadline):
         if self.halted:
@@ -111,11 +119,19 @@ class Navigator:
             stop_wheels(self.link)
             _command(self.link, "END")
 
-    def _pulse(self, action, amount, deadline):
+    def _pulse(self, action, amount, deadline, *, limit_ms=None, reference=None):
         self._check(deadline)
         c = self.control
         ms = round(1000 * amount / self.config.speeds[action])
         ms = min(c.max_pulse_ms, max(c.min_pulse_ms, ms))
+        if limit_ms is not None:
+            ms = min(ms, limit_ms)
+        if self.board is not None and action.startswith("rotate"):
+            origin = reference or self.origin
+            if origin is not None:
+                state, _ = self.imu.snapshot()
+                if not self.board.travel.contains(origin.to_field(state.x_m, state.y_m)):
+                    raise RuntimeError("离板边或围挡过近，无法在当前位置原地旋转")
         if monotonic() + ms / 1000 + c.settle_s >= deadline:
             raise TimeoutError("剩余时间不足以完成点动和停车")
         self.imu.moving()
@@ -179,11 +195,13 @@ class Navigator:
                     return
             progress.update(abs(error))
             self._pulse("rotate-left" if error > 0 else "rotate-right",
-                        min(abs(error), self.control.scan_step_deg), deadline)
+                        min(abs(error), self.control.scan_step_deg), deadline,
+                        reference=reference)
 
     def _survey(self, deadline):
         _, start_turn = self.imu.snapshot()
         sights = []
+        scan_reference = None
         progress = _Progress(.5, self.control.stall_pulses)
         while True:
             self._check(deadline)
@@ -193,22 +211,26 @@ class Navigator:
                 _, fix, state = seen
                 transform = Origin.match(fix.x_m, fix.y_m, fix.yaw_rad, state)
                 sights.append(_Sight(transform, turn, fix.tag_ids, fix.rms_px))
+                if scan_reference is None and self.origin is None:
+                    scan_reference = transform
             remaining = 360. - math.degrees(turn - start_turn)
             if remaining <= 0:
                 break
             progress.update(remaining)
-            self._pulse("rotate-left", min(remaining, self.control.scan_step_deg), deadline)
+            self._pulse("rotate-left", min(remaining, self.control.scan_step_deg), deadline,
+                        reference=scan_reference)
         reference, best_turn = self._survey_consensus(sights)
         self._face(best_turn, reference, deadline)
         return reference
 
-    def _fix_at_rest(self, reference, deadline):
+    def _fix_at_rest(self, reference, deadline, *, observe=None):
         """连续独立新帧与扫描结果相符才修正。在停车期间失去参照会超时退出。"""
         until = min(deadline, monotonic() + self.control.vision_timeout_s)
+        observe = observe or self._observe
         streak = []
         while len(streak) < self.control.confirm_frames:
             self._check(until)
-            seen = self._observe(until)
+            seen = observe(until)
             if seen is None:
                 streak.clear()
                 continue
@@ -225,26 +247,67 @@ class Navigator:
         self.imu.correct(stamp, x, y, wrap(fix.yaw_rad - self.origin.yaw_rad))
         return [f for _, f in streak]
 
-    def _translate(self, target, gain, deadline):
+    def _translate(self, target, gain, deadline, *, area=None, max_step=None):
         state, _ = self.imu.snapshot()
-        if not self._inside(*self.origin.to_field(state.x_m, state.y_m)):
+        position = self.origin.to_field(state.x_m, state.y_m)
+        if not self._inside(*position):
             raise RuntimeError("估计车心已超出场地范围，停止平移")
         ahead, left = rotate(target[0] - state.x_m, target[1] - state.y_m, -state.yaw_rad)
-        if abs(ahead) >= abs(left):
-            action, amount = ("go" if ahead > 0 else "back"), abs(ahead)
-        else:
-            action, amount = ("left" if left > 0 else "right"), abs(left)
-        self._pulse(action, gain * amount, deadline)
+        components = ((ahead, "go", "back", 0.), (left, "left", "right", math.pi / 2))
+        for component, positive, negative, direction in sorted(
+                components, key=lambda item: abs(item[0]), reverse=True):
+            action = positive if component > 0 else negative
+            amount = gain * abs(component)
+            if area is None:
+                self._pulse(action, amount, deadline)
+                return
+            if abs(component) < 1e-6:
+                continue
+            speed = self.config.speeds[action]
+            distance = self.control.max_pulse_ms * speed / 1000
+            if max_step is not None:
+                distance = min(distance, max_step)
+            angle = state.yaw_rad + self.origin.yaw_rad + direction
+            if component < 0:
+                angle += math.pi
+            # 点动后仍须能看到当前路点，避免横移绕到障碍矩形的另一侧再反复重规划。
+            usable = area.clip(position, (math.cos(angle), math.sin(angle)),
+                               distance, self.origin.to_field(*target))
+            limit_ms = math.floor(usable * 1000 / speed + 1e-9)
+            if limit_ms >= self.control.min_pulse_ms:
+                self._pulse(action, amount, deadline, limit_ms=limit_ms)
+                return
+        raise RuntimeError("剩余净空不足以执行最小平移点动")
+
+    def _travel_target(self, target):
+        if self.board is None:
+            return target, None
+        state, _ = self.imu.snapshot()
+        position = self.origin.to_field(state.x_m, state.y_m)
+        goal = self.origin.to_field(*target)
+        area = self.board.travel
+        points = self._route_points
+        if self._route_goal != goal or not points or not area.allows(position, points[0]):
+            points = area.path(position, goal, self.control.tolerance_m + .025)
+            self._route_goal = goal
+            self._route_points = points
+        if len(points) > 1 and math.dist(position, points[0]) <= self.control.tolerance_m:
+            if area.allows(position, points[1]):
+                points.pop(0)
+        distance = sum(math.dist(a, b) for a, b in zip([position, *points], points))
+        return self.origin.to_start(*points[0]), distance
 
     def _approach(self, target, deadline):
         progress = _Progress(min(.01, self.control.coarse_m / 5), self.control.stall_pulses)
         while True:
             state, _ = self.imu.snapshot()
             distance = math.hypot(target[0] - state.x_m, target[1] - state.y_m)
-            if distance <= self.control.coarse_m:
+            next_target, route_distance = self._travel_target(target)
+            if (distance if route_distance is None else route_distance) <= self.control.coarse_m and (
+                    self.board is None or math.dist(next_target, target) < 1e-8):
                 return
-            progress.update(distance)
-            self._translate(target, .8, deadline)
+            progress.update(distance if route_distance is None else route_distance)
+            self._translate(next_target, .8, deadline, area=self.board.travel if self.board else None)
 
     def _navigate(self, x, y, frame, deadline):
         if self.origin is None:
@@ -254,6 +317,10 @@ class Navigator:
         goal = (x, y) if frame == "field" else self.origin.to_field(x, y)
         if not self._inside(*goal):
             raise ValueError(f"目标 {goal} 超出标定的车心场地范围")
+        if self.board is not None and not self.board.travel.contains(goal):
+            raise ValueError("目标离板边或围挡过近，无法执行普通坐标导航")
+        if self._parked_at_board:
+            self._retreat_from_board(deadline)
         target = self.origin.to_start(*goal)
         self._approach(target, deadline)
         reference = self._survey(deadline)
@@ -263,6 +330,9 @@ class Navigator:
             reference = self.origin  # Tracker 已接受绝对校正，此后的预测使用固定的启动原点。
             errors = [math.hypot(goal[0] - f.x_m, goal[1] - f.y_m) for f in fixes]
             if max(errors) <= self.control.tolerance_m:
+                if self.board is not None and not all(
+                        self.board.travel.contains((f.x_m, f.y_m)) for f in fixes):
+                    raise RuntimeError("目标附近的实测位姿没有足够转向净空")
                 self._check(deadline)
                 last = fixes[-1]
                 return Arrival(goal, last.x_m, last.y_m, last.yaw_rad,
@@ -270,7 +340,8 @@ class Navigator:
                                tuple(sorted({i for f in fixes for i in f.tag_ids})))
             progress.update(max(errors))
             if errors[-1] > self.control.tolerance_m:
-                self._translate(target, .55, deadline)
+                next_target, _ = self._travel_target(target)
+                self._translate(next_target, .55, deadline, area=self.board.travel if self.board else None)
 
     def go_to(self, x_m, y_m, *, frame="start"):
         """前往米制坐标。start 为启动系，field 为实测墙标地图系。成功返回 Arrival。"""
@@ -278,6 +349,8 @@ class Navigator:
             raise ValueError("坐标须为有限米数，frame 应为 start 或 field")
         if frame == "field" and not self._inside(x_m, y_m):
             raise ValueError("目标超出标定的车心场地范围")
+        if frame == "field" and self.board is not None and not self.board.travel.contains((x_m, y_m)):
+            raise ValueError("目标离板边或围挡过近，无法执行普通坐标导航")
         with self._operation():
             return self._navigate(x_m, y_m, frame, monotonic() + self.control.timeout_s)
 
@@ -286,6 +359,115 @@ class Navigator:
         if name not in self.field.docks_m:
             raise ValueError(f"未标定的停靠点 {name}")
         return self.go_to(*self.field.docks_m[name], frame="field")
+
+    def _board_heading_error(self, yaw_rad):
+        return math.degrees(wrap(self.board.heading - yaw_rad))
+
+    def _align_for_board(self, deadline):
+        progress = _Progress(.4, self.control.stall_pulses)
+        while True:
+            state, _ = self.imu.snapshot()
+            error = self._board_heading_error(state.yaw_rad + self.origin.yaw_rad)
+            if abs(error) <= self.board.settings.heading_tolerance_deg:
+                return
+            progress.update(abs(error))
+            self._pulse("rotate-left" if error > 0 else "rotate-right",
+                        min(abs(error), self.control.scan_step_deg), deadline)
+
+    def _board_lane(self, goal, deadline, *, observe=None):
+        """预靠点到作业位只平移。见到棋盘后，每步停车用下视位姿修正。"""
+        tolerance = min(self.control.tolerance_m, .015)
+        target = self.origin.to_start(*goal)
+        progress = _Progress(.003, self.control.stall_pulses)
+        seen_board = False
+        while True:
+            self._check(deadline)
+            state, _ = self.imu.snapshot()
+            distance = math.dist(target, (state.x_m, state.y_m))
+            if observe is not None and not seen_board and distance > tolerance:
+                until = min(deadline, monotonic() + self.control.vision_timeout_s)
+                seen_board = observe(until) is not None
+            if observe is not None and (seen_board or distance <= tolerance):
+                fixes = self._fix_at_rest(self.origin, deadline, observe=observe)
+                seen_board = True
+                if all(math.dist(goal, (f.x_m, f.y_m)) <= tolerance and
+                       abs(self._board_heading_error(f.yaw_rad)) <= self.board.settings.heading_tolerance_deg
+                       for f in fixes):
+                    last = fixes[-1]
+                    return Arrival(goal, last.x_m, last.y_m, last.yaw_rad,
+                                   *self.origin.to_start(last.x_m, last.y_m),
+                                   math.dist(goal, (last.x_m, last.y_m)),
+                                   tuple(sorted({i for f in fixes for i in f.tag_ids})))
+                state, _ = self.imu.snapshot()
+                distance = math.dist(target, (state.x_m, state.y_m))
+            elif observe is None and distance <= tolerance:
+                return
+            if abs(self._board_heading_error(state.yaw_rad + self.origin.yaw_rad)) > (
+                    self.board.settings.heading_tolerance_deg):
+                raise RuntimeError("靠近棋盘时航向偏离，已停车")
+            if distance <= tolerance:
+                progress.update(distance)
+                continue
+            progress.update(distance)
+            self._translate(target, .7, deadline, area=self.board.near, max_step=.025)
+
+    def _retreat_from_board(self, deadline):
+        self._board_lane(self.board.staging, deadline)
+        state, _ = self.imu.snapshot()
+        if not self.board.travel.contains(self.origin.to_field(state.x_m, state.y_m)):
+            raise RuntimeError("退出工位后仍未获得足够的转向净空")
+        self._parked_at_board = False
+
+    def go_to_board(self, *, top_config, top_source=None):
+        """绕到棋盘南侧，按实测作业位停靠，返回下视相机确认的 Arrival。"""
+        if self.board is None or self.board.work is None:
+            raise ValueError("请在 nav.json 的 board_approach 填写实测 work_distance_m")
+        from .nav_sensors import open_camera
+        if "." in __package__:
+            from ..vision.board import BOARD_LAYOUT, fit_plane
+            from ..vision.camera import Mount
+            from ..vision.front import FrontFix
+            from ..vision.robot import pose_from_plane
+            from ..vision.tags import Detector
+        else:
+            from vision.board import BOARD_LAYOUT, fit_plane
+            from vision.camera import Mount
+            from vision.front import FrontFix
+            from vision.robot import pose_from_plane
+            from vision.tags import Detector
+
+        mount = Mount.load(top_config)
+        if not mount.image_size or not mount.robot_center_px or not mount.robot_forward_px:
+            raise ValueError("请先标定下视相机的分辨率、车心和车头方向")
+        source = top_source if top_source is not None else os.environ.get("TOP_CAM")
+        if source is None:
+            raise ValueError("请指定 --top-source 或 TOP_CAM")
+        layout = {key: points for key, points in self.field.floor_layout().items()
+                  if key in BOARD_LAYOUT}
+        detector = Detector(["36h11"])
+        last_stamp = 0.
+
+        with self._operation(), open_camera(str(source), mount, "下视相机") as camera:
+            deadline = monotonic() + self.control.timeout_s
+            camera.after(monotonic(), min(deadline, monotonic() + self.control.vision_timeout_s))
+            self._navigate(*self.board.staging, "field", deadline)
+            self._align_for_board(deadline)
+
+            def observe(until):
+                nonlocal last_stamp
+                stamp, frame = camera.after(max(last_stamp, self.settled_at), until)
+                last_stamp = stamp
+                plane = fit_plane(detector.detect(frame), layout)
+                pose = pose_from_plane(plane, "floor", mount)
+                if pose is None or not self.board.near.contains((pose.x_m, pose.y_m)):
+                    return None
+                fix = FrontFix(pose.x_m, pose.y_m, pose.yaw_rad,
+                               tuple(tag_id for _, tag_id in plane.tags_used), pose.rms_px)
+                return stamp, fix, self.imu.at(stamp, until)
+
+            arrival = self._board_lane(self.board.work, deadline, observe=observe)
+            self._parked_at_board = True
+            return arrival
 
 
 @contextmanager
@@ -344,25 +526,54 @@ def main():
     action = p.add_mutually_exclusive_group(required=True)
     action.add_argument("--dock", nargs="+", help="依次前往地图中的停靠点，例如 A B C D")
     action.add_argument("--xy", type=float, nargs=2, metavar=("X米", "Y米"))
+    action.add_argument("--board", action="store_true", help="绕行并停靠棋盘作业位")
     action.add_argument("--reset-lock", action="store_true", help="人工清除障碍后解除锁存，不运动车轮")
     p.add_argument("--frame", choices=("start", "field"), default="start", help="--xy 的坐标系")
     p.add_argument("--config", help="导航配置 JSON")
     p.add_argument("--uno-port")
     p.add_argument("--imu-port")
     p.add_argument("--front-source")
+    p.add_argument("--top-config", help="下视相机车心及朝向标定 JSON")
+    p.add_argument("--top-source", help="下视相机设备号或 V4L2 设备路径")
+    p.add_argument("--dry-run", action="store_true", help="只计算棋盘绕行路径，不连接硬件")
+    p.add_argument("--from-field", type=float, nargs=2, metavar=("X米", "Y米"),
+                   help="仅路径预览使用，场地系车心起点")
     args = p.parse_args()
     try:
+        if args.dry_run:
+            if not args.board or args.from_field is None:
+                p.error("路径预览需要 --board --dry-run --from-field X Y")
+            nav_path = Path(args.config).expanduser() if args.config else None
+            data = json.loads(nav_path.read_text(encoding="utf-8")) if nav_path else {}
+            field = (json.loads((nav_path.parent / data["field"]).read_text(encoding="utf-8"))
+                     if nav_path else {})
+            board = BoardRoute(BoardApproach(**(data.get("board_approach") or {})),
+                               field.get("bounds_m", (0., 0., 2., 2.)),
+                               field.get("board_origin_mm", (900., 900.)),
+                               field.get("board_yaw_deg", 0.))
+            tolerance = data.get("control", {}).get("tolerance_m", .035)
+            route = board.travel.path(tuple(args.from_field), board.staging, tolerance + .025)
+            print(json.dumps({"waypoints_field_m": route, "heading_deg": board.settings.heading_deg,
+                              "work_field_m": board.work}, allow_nan=False))
+            return
+        if args.from_field is not None:
+            p.error("--from-field 仅用于 --dry-run")
         if args.reset_lock:
             reset_navigation_lock(uno_port=args.uno_port)
             print("已解除导航锁存，车轮保持停车。")
             return
         if not args.config:
             p.error("导航需要 --config")
+        if args.board and not args.top_config:
+            p.error("--board 需要 --top-config")
         with open_navigation(args.config, uno_port=args.uno_port, imu_port=args.imu_port,
                              front_source=args.front_source) as nav:
             if args.dock:
                 for name in args.dock:
                     print(json.dumps(asdict(nav.go_to_dock(name)), allow_nan=False), flush=True)
+            elif args.board:
+                result = nav.go_to_board(top_config=args.top_config, top_source=args.top_source)
+                print(json.dumps(asdict(result), allow_nan=False))
             else:
                 print(json.dumps(asdict(nav.go_to(*args.xy, frame=args.frame)), allow_nan=False))
     except (OSError, RuntimeError, ValueError, KeyError) as error:

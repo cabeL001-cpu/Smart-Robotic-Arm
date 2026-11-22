@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 from typing import Optional
 
+from .board_route import BoardApproach
 from .imu import rotate, wrap
 
 
@@ -67,6 +68,7 @@ class NavigationConfig:
     speeds: dict
     imu_mount_yaw_deg: float
     control: Control
+    board_approach: Optional[BoardApproach] = None
 
     @classmethod
     def load(cls, path):
@@ -86,5 +88,7 @@ class NavigationConfig:
         imu_yaw = data.get("imu_mount_yaw_deg", 0.)
         if not math.isfinite(imu_yaw):
             raise ValueError("imu_mount_yaw_deg 需为实测安装角")
+        board = data.get("board_approach")
         return cls(path.parent / data["field"], path.parent / data["front_mount"], origin,
-                   speeds, imu_yaw, Control(**data.get("control", {})))
+                   speeds, imu_yaw, Control(**data.get("control", {})),
+                   BoardApproach(**board) if board is not None else None)

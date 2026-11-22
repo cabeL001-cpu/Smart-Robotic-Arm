@@ -6,13 +6,15 @@ from math import acos, atan2, cos, degrees, hypot, radians, sin
 
 @dataclass(frozen=True)
 class Geometry:
-    upper_mm: float = 152.0
-    forearm_mm: float = 212.0
+    upper_mm: float = 215.0
+    forearm_mm: float = 118.0
     base_x_mm: float = -100.0
     base_y_mm: float = 150.0
     base_yaw_deg: float = 0.0
-    shoulder_limit_deg: float = 85.0
-    elbow_limit_deg: float = 135.0
+    shoulder_limit_deg: float = 90.0
+    elbow_limit_deg: float = 180.0
+    shoulder_lo_deg: float = -90.0
+    shoulder_hi_deg: float = 0.0
 
 
 def cell_center(cell):
@@ -45,7 +47,7 @@ def inverse(x_mm, y_mm, geometry=Geometry(), previous=(0.0, 0.0), *, joint_limit
         shoulder = atan2(dy, dx) - atan2(g.forearm_mm * sin(elbow), g.upper_mm + g.forearm_mm * cos(elbow))
         shoulder_deg = (degrees(shoulder) - g.base_yaw_deg + 180) % 360 - 180
         elbow_deg = degrees(elbow)
-        if abs(shoulder_deg) <= g.shoulder_limit_deg and abs(elbow_deg) <= g.elbow_limit_deg:
+        if g.shoulder_lo_deg <= shoulder_deg <= g.shoulder_hi_deg and abs(elbow_deg) <= g.elbow_limit_deg:
             angles = shoulder_deg, elbow_deg
             if joint_limits is None or all(lo - 1e-9 <= q <= hi + 1e-9
                                            for q, (lo, hi) in zip(angles, joint_limits)):
