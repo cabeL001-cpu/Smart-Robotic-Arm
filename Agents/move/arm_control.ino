@@ -1,8 +1,8 @@
 #include <Servo.h>
 #include "arm_limits.h"
 
-// 肩部接扩展板 A4（D18）信号针，肘部接 Uno 数字 D10。D10 同时控制扩展板 VOUT，须保持 VOUT 空载。
-const uint8_t SHOULDER_PIN = 18;
+// 肩部接扩展板 D13 信号针，肘部接 Uno 数字 D10。D10 同时控制扩展板 VOUT，须保持 VOUT 空载。
+const uint8_t SHOULDER_PIN = 13;
 const uint8_t ELBOW_PIN = 10;
 Servo shoulderServo;
 Servo elbowServo;
@@ -14,7 +14,8 @@ void setArmPulses(char *arguments) {
     Serial.println(F("OK ARM OFF"));
     return;
   }
-  if (SHOULDER_MIN_US < 500 || SHOULDER_MAX_US > 2500 || SHOULDER_MIN_US > SHOULDER_MAX_US ||
+  // Servo 库把 attach 的 min 存为 int8_t，低于 36 µs 会溢出，下限反被钳到 1024 µs。
+  if (SHOULDER_MIN_US < 36 || SHOULDER_MAX_US > 2500 || SHOULDER_MIN_US > SHOULDER_MAX_US ||
       ELBOW_MIN_US < 500 || ELBOW_MAX_US > 2500 || ELBOW_MIN_US > ELBOW_MAX_US) {
     Serial.println(F("ERR ARM CALIBRATION"));
     return;
@@ -32,8 +33,8 @@ void setArmPulses(char *arguments) {
   // attach 会启用定时中断。先同时装入两路合法脉宽，再允许首个脉冲发出。
   noInterrupts();
   if (!shoulderServo.attached()) {
-    shoulderServo.attach(SHOULDER_PIN, 500, 2500);
-    elbowServo.attach(ELBOW_PIN, 500, 2500);
+    shoulderServo.attach(SHOULDER_PIN, SHOULDER_MIN_US, 2500);
+    elbowServo.attach(ELBOW_PIN, ELBOW_MIN_US, 2500);
   }
   shoulderServo.writeMicroseconds(shoulderUs);
   elbowServo.writeMicroseconds(elbowUs);
