@@ -121,6 +121,7 @@ CLI 按 `python -m 模块名` 调用。视觉输入 `--source` 可为十进制�
 | `vision.front` | `--source`、`--config front.json`、`--field field.json` 必填，`--frames N` 可限帧。使用镜头内外参和墙标实测三维位置。输出 `pose.x_m/y_m/yaw_rad/tag_ids/rms_px`，适合独立标定前摄及作为绝对观测。 |
 | `vision.arm` | `--cell 0..8` 必填，`--source` 默认 `0`，`--config` 可选。`measurement` 含 `tip_mm, target_mm, error_mm, tags_used, rms_px`，`arrived` 按连续两秒判定。 |
 | `vision.align` | `--save-mount 输出JSON --base X毫米 Y毫米 朝向度` 标定基座，或 `--cell 格号 --arm-config 关节JSON --port 端口` 实时闭环。两种模式都使用 `--source`、`--config`；前者可用静态图，后者会驱动舵机。 |
+| `vision.servo` | `--cells 0..8`（可多个）、`--start 肩µs 肘µs` 必填（`--dry-run` 除外）。`--source` 默认 `0`，`--config` 可选，`--probe`/`--tolerance`/`--max-steps` 调整伺服，`--release` 结束时 `ARM OFF`。只用印刷角标和黑框方块中心，不要求末端标签可解码；运行结束后按格输出 `Placement` JSON。 |
 | `vision.robot` | `--source` 默认 `0`，`--config` 为顶摄车心标定，`--field` 为场地配置。`--calibrate X米 Y米 朝向度 --save-mount 文件` 成对使用，保存已知姿态下车心投影。平时输出 `pose`；加 `--cell N` 同帧输出 `arm`。 |
 
 主要可组合的视觉接口如下。`tags` 为 `{(family,id): 像素角点[4,2]}`，角点按码图左上、右上、右下、左下排列。`size=(宽,高)`。
@@ -137,6 +138,7 @@ CLI 按 `python -m 模块名` 调用。视觉输入 `--source` 可为十进制�
 | `vision.robot.calibrate(mount,plane,size,x_m,y_m,yaw_deg)`、`pose_from_plane(plane,source,mount)` | 在已知工位写入 `mount` 的车心与车前点；后者返回 `Pose(x_m,y_m,yaw_rad,source,tags_used,rms_px)` 或 `None`。 |
 | `vision.arm.target_xy(cell)`、`measure(tags,plane,size,cell,mount)`、`Hold(seconds=2,max_gap=.5).update(t,observation)` | 计算棋盘格心，返回一次末端测量或 `None`，累计误差严格小于 6.7 mm 的连续观测。漏帧、时间倒退或帧间隔超过允许值会重新计时。 |
 | `vision.align.observations(source,mount,cell)`、`align(cell,samples,send,mount,config,settle_s=.6,max_steps=10,timeout_s=20)` | 前者产出 `(t,plane,measurement)`；后者通过 `send((肩角,肘角))` 实施校正。参数依次控制沉降等待秒数、最大修正次数和观测超时。成功返回最后一次 `Measurement`，失败抛异常。 |
+| `vision.servo.place_cells(cells, *, start, source, mount=None, port=DEFAULT_PORT, link=None, detector=None, config=ServoConfig(), release=False, log=print)`、`Servo(link, source, mount, *, detector, config, log)`、`Servo.place(cell, start)` | `start` 为 `(肩µs,肘µs)`，格间沿用上一格终点。`Servo` 复用一次相机流和串口；`place` 先实测 2×2 雅可比再牛顿迭代，返回 `Placement(cell, ok, error_mm, shoulder_us, elbow_us, moves, rms_px)`。`ServoConfig` 的 `probe_us/max_step_us/tolerance_mm/settle_s/max_steps/refresh_steps/retries` 控制探测与迭代，脉宽钳在固件 400–1080 / 500–2500 µs。`link=None` 只测量；失败抛 `RuntimeError`，臂停在原地不自动断电。 |
 
 ## 5. IMU 采集、融合与回放
 

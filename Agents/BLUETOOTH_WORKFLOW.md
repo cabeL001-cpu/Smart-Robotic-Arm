@@ -113,7 +113,7 @@ rfcomm show rfcomm0
 
 ### 3.4 日常连接与断开
 
-通过 `rfcomm bind` 登记后，程序打开 `/dev/rfcomm0` 时才会建立连接。底盘控制、关节点动和 `vision.align` 闭环驱动都会打开串口，用完关闭。`vision.scan`、`vision.arm` 和 `vision.robot` 可单独采集画面。HC-05 空闲时可能快闪，判断链路用实际停车回执。
+通过 `rfcomm bind` 登记后，程序打开 `/dev/rfcomm0` 时才会建立连接。底盘控制、关节点动和 `vision.align`、`vision.servo` 闭环驱动都会打开串口，用完关闭。`vision.scan`、`vision.arm` 和 `vision.robot` 可单独采集画面。HC-05 空闲时可能快闪，判断链路用实际停车回执。
 
 ~~~text
 配对（一次，每台树莓派各做一遍）
