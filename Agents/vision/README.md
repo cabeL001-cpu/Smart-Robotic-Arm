@@ -101,6 +101,27 @@ python3 -m vision.servo --source 0 --cells 0 3 6 7 8 --raw --tolerance 2.5 \
 
 实测注意事项：20 µs 探测低于舵机静摩擦死区，末端几乎不动，`--probe` 用 60 µs；同一脉宽隔一段时间读数漂几毫米，且换接近方向后落点差约 12 mm（舵机回差），**纯脉宽重放达不到 6.7 mm，必须每格重新闭环**。容差取 2–2.5 mm。MJPG 编码会让小角标整帧读不出，实机用 `--raw` 走 YUYV。肩部实测窗口 360–640 µs（≤320 无动作、700 起抖动）；0 格并入肘部折叠支路后肩会顶到 360 下限，这是 0 格只能开环的原因之一。末端码被大臂遮挡是 0 格、也可能是个别姿态下的固有限制，遮挡时闭环按上文直接停止。[联调记录](../CALIBRATION_PRACTICE.md) 第 9 节
 
+## 车体微调入格
+
+`vision.drive` 把臂固定在一组脉宽（默认 360、1570 µs，指尖落在 7 格附近），不再动舵机，改用底盘前进/后退与左右平移把指尖挪进格心，适合臂单独够不到的 1、2、4、5 格。臂全程保持力矩，结束也不自动 `ARM OFF`。
+
+~~~bash
+python3 -m vision.drive --source 0 --cells 1 4 --targets ../board_targets.json --raw
+~~~
+
+雅可比改成底盘：先前进 `--probe` 毫秒、再左移同样时长，用指尖在棋盘上的位移实测毫米/毫秒两列（方向自动测出，不依赖车头朝向），再按 `J·Δt = 目标 − 指尖` 牛顿迭代，把毫秒数依次发给 `GO/BACK/LEFT/RIGHT`；单次修正限幅 `--max-step`（缺省 700 ms），容差 `--tolerance`（缺省 5 mm）。探测方向可用 `--probe-sign 前进 左移` 取 −1 改成后退/右移，`--arm 肩 肘` 可改固定脉宽。**走车后连续多帧看不到棋盘角标或末端，或固件报超声避障 `ERR OBSTACLE`，立即停车返回 `note` 说明原因，不再盲动。** 前进与平移在棋盘上接近同向（车头斜着）时雅可比被判为奇异，先把车摆正再跑。
+
+## 统一入格入口
+
+`vision.place` 是一次调用送多格的入口。`--method auto`（缺省）按可达性分流：0、3、6、7、8 走臂闭环（`servo.place`），1、2、4、5 走车体闭环（`drive.Driver.place`）；`--method arm` 或 `--method drive` 强制只用一种。两者共用同一个串口和相机流，逐格输出 `CellResult`（`cell, ok, method, error_mm, pulses, moves, rms_px, note`），`method` 标明该格实际使用的方式。
+
+~~~bash
+python3 -m vision.place --source 0 --cells 1 4 --targets ../board_targets.json --raw
+python3 -m vision.place --source 0 --cells 8 --method arm --targets ../board_targets.json
+~~~
+
+臂相关参数沿用 `vision.servo`（`--probe`、`--probe-sign`、`--tolerance`、`--max-steps`、`--shoulder`、`--elbow`），车体相关参数加 `--drive-` 前缀（`--drive-probe`、`--drive-sign`、`--drive-step`、`--drive-tolerance`、`--drive-steps`）；`--arm 肩 肘` 指定车体闭环时的固定臂脉宽。可达集 `ARM_CELLS` 直接取 `CELL_SEEDS` 的键，重扫预置位后自动并入分流。
+
 ## 机器人场地位姿
 
 场地左下角为原点，右/上为 +X/+Y，朝 +X 为 0，逆时针为正。按场地图，棋盘左下在 (0.9, 0.9) m，棋盘上边朝场地上方。A、B、C、D 分别为 (0.5, 1.5)、(1.5, 1.5)、(1.5, 0.5)、(0.5, 0.5) m。棋盘须固定在场地中。[场地布局](../image-2.png)
