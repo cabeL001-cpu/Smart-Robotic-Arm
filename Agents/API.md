@@ -39,7 +39,7 @@ with MHS.open_navigation(cfg) as nav:
 
 | 接口 | 调用与结果 |
 | --- | --- |
-| `open_imu(port,calibration_s,mount_yaw_deg)` | `with open_imu(...) as imu` 打开 115200 串口并做静止校准。`imu.snapshot()` 返回 `(State,累计有符号转角弧度)`，累计转角不受视觉修改航向的影响。`imu.at(stamp,deadline)` 等待并插值得到曝光时刻状态。超过采样与历史时限会抛 `TimeoutError`。 |
+| `open_imu(port,calibration_s,mount_yaw_deg)` | `with open_imu(...) as imu` 打开 115200 串口并做静止校准。`imu.snapshot()` 返回 `(State,AHRS 累计有符号转角弧度)`，累计转角不受视觉修改航向的影响；`imu.snapshot_gyro()` 返回同样的状态，但转角来自陀螺仪竖直分量积分，不被磁力计拉偏。`imu.at(stamp,deadline)` 等待并插值得到曝光时刻状态。超过采样与历史时限会抛 `TimeoutError`。 |
 | `imu.moving()`、`imu.settle(seconds,deadline)`、`imu.correct(stamp,x,y,yaw)` | 分别从下一个采样起解除零速约束、在制动后等待沉降再开始零速约束（返回沉降截止时刻）、用启动系米坐标与弧度校正历史。`correct` 成功返回 `None`，过期或重复观测抛 `TimeoutError`。 |
 | `open_front(source,mount)` | `with open_front(...) as camera` 持续获取实时前摄新帧，`source` 为相机号或设备路径，`mount` 为这台相机的 `Mount`。`camera.after(stamp,deadline)` 返回 `(新时间,已去畸变帧)`，`camera.check_live()` 检查采集故障或过期。 |
 

@@ -5,7 +5,7 @@ UNO_PORT 或命令行的 --port 改回 USB 串口（如 /dev/ttyACM0）。
 """
 
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from time import monotonic, sleep
 
 DEFAULT_PORT = os.environ.get("UNO_PORT", "/dev/rfcomm0")
@@ -59,7 +59,8 @@ def _open_port(serial, port):
     except serial.SerialException as error:
         hint = ""
         if port.startswith("/dev/rfcomm"):
-            hint = "；权限不足时执行 sudo chown $USER " + port
+            hint = ("；权限不足时执行 sudo chown $USER " + port
+                    + "；提示 exclusively lock 表示端口被其他进程占用，用 fuser -v " + port + " 查")
         raise OSError(f"{port} 打不开：{error}{hint}") from error
 
 
@@ -86,3 +87,67 @@ def open_uno(port=DEFAULT_PORT):
             break
     with link:
         yield link
+
+
+class ReconnectLink:
+    """长路线用：蓝牙链路瞬时断开时重开端口并重新停车握手。
+
+    只有写入或读取报“设备已断开”才触发。重握手的 STOP 会终止正在执行的动作，
+    本次写入随后重发；若原指令其实已经执行，修正点动最多重复一次小脉冲，
+    直行分段最多多走一段。
+    """
+
+    def __init__(self, port=DEFAULT_PORT):
+        self.port = port
+        self.stack = None
+        self.link = None
+        self.reopen()
+
+    def reopen(self):
+        self.close()
+        deadline = monotonic() + HANDSHAKE_SECONDS
+        while True:
+            try:
+                stack = open_uno(self.port)
+                self.link = stack.__enter__()
+            except OSError:
+                # 蓝牙通道刚断开时内核可能还占着节点，排他锁约一秒后才释放，
+                # 稍等重开；超过握手窗口才把错误交给上层。
+                if monotonic() >= deadline:
+                    raise
+                sleep(.5)
+                continue
+            self.stack = stack
+            return
+
+    def close(self):
+        link, self.link = self.link, None
+        if link is not None:
+            # 先直接关描述符，让内核立刻释放排他锁，再退出 open_uno 生成器。
+            with suppress(Exception):
+                link.close()
+        stack, self.stack = self.stack, None
+        if stack is not None:
+            with suppress(Exception):
+                stack.__exit__(None, None, None)
+
+    def write(self, data):
+        return self._retry(lambda: self.link.write(data))
+
+    def readline(self):
+        return self._retry(lambda: self.link.readline())
+
+    def _retry(self, call):
+        try:
+            if self.link is None:
+                self.reopen()
+            return call()
+        except OSError:
+            self.reopen()
+            return call()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()

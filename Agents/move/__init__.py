@@ -3,9 +3,11 @@
 from contextlib import nullcontext, suppress
 
 if "." in __package__:
-    from ..uno import BAUD_RATE, DEFAULT_PORT, MotionBlocked, open_uno, stop_wheels, wait_reply
+    from ..uno import (BAUD_RATE, DEFAULT_PORT, MotionBlocked, ReconnectLink, open_uno,
+                       stop_wheels, wait_reply)
 else:
-    from uno import BAUD_RATE, DEFAULT_PORT, MotionBlocked, open_uno, stop_wheels, wait_reply
+    from uno import (BAUD_RATE, DEFAULT_PORT, MotionBlocked, ReconnectLink, open_uno,
+                     stop_wheels, wait_reply)
 
 DEFAULT_DURATION_MS = 1000
 ACTIONS = (

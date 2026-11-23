@@ -57,12 +57,24 @@ class Tracker:
             sign = 1 if dot(r[2], s.accel_g) >= 0 else -1
             biases.append([a-sign*z for a,z in zip(s.accel_g, r[2])])
         self.bias_g = tuple(sum(axis)/len(samples) for axis in zip(*biases))
+        # 静止段测得的机体系陀螺零偏，用于航向速率积分。
+        self.bias_gyro = tuple(sum(axis)/len(samples)
+                               for axis in zip(*(s.gyro_rad_s for s in samples)))
         self.mount_yaw = mount_yaw_rad
         self.offset = yaw_rad + mount_yaw_rad - math.atan2(r[1][0], r[0][0])
         self.state = State(samples[-1].t, x_m, y_m, wrap(yaw_rad), 0., 0.)
         self.previous_acc = (0., 0.)
         self.history = deque([self.state])
         self.last_fix = float("-inf")
+
+    def turn_rate(self, sample):
+        """机体系角速度在导航竖直轴上的分量，rad/s，左转为正。
+
+        只用四元数的横滚、俯仰（由加速度融合，可靠），不经过磁力计偏航。
+        """
+        r = attitude(sample.quat)
+        bias = tuple(g-b for g, b in zip(sample.gyro_rad_s, self.bias_gyro))
+        return dot(bias, r[2])
 
     def update(self, sample, stationary=False):
         """stationary 由已知停车状态传入。匀速行驶时保留已有速度。"""

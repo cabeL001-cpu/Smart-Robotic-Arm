@@ -59,6 +59,8 @@ class ImuFeed(_Reader):
         super().__init__("IMU")
         self.tracker = tracker
         self.turn = 0.               # AHRS 相邻采样的有符号转角，不计入视觉修正
+        self.gyro_turn = 0.          # 陀螺竖直分量积分，不经过磁力计
+        self.last_rate = None
         self.rest_from = 0.
 
     def consume(self, samples):
@@ -69,8 +71,14 @@ class ImuFeed(_Reader):
                 before = self.tracker.state
                 if sample.t - before.t > .3:
                     raise TimeoutError("IMU 中断超过 0.3 秒，无法连续推算")
+                rate = self.tracker.turn_rate(sample)
+                dt = sample.t - before.t
                 now = self.tracker.update(sample, stationary=sample.t >= self.rest_from)
                 self.turn += wrap(now.yaw_rad - before.yaw_rad)
+                # 实车磁力计受电机和电池干扰，改用陀螺梯形积分累计转角。
+                if self.last_rate is not None:
+                    self.gyro_turn += (self.last_rate + rate) * dt / 2
+                self.last_rate = rate
                 self.cv.notify_all()
 
     def snapshot(self):
@@ -80,6 +88,15 @@ class ImuFeed(_Reader):
             if monotonic() - state.t > .3:
                 raise TimeoutError("IMU 位姿过期")
             return state, self.turn
+
+    def snapshot_gyro(self):
+        """与 snapshot 相同，但累计转角来自陀螺积分，不受磁力计航向漂移影响。"""
+        with self.cv:
+            self.check()
+            state = self.tracker.state
+            if monotonic() - state.t > .3:
+                raise TimeoutError("IMU 位姿过期")
+            return state, self.gyro_turn
 
     def moving(self):
         with self.cv:
