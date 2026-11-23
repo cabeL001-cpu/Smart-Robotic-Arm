@@ -23,6 +23,7 @@ class Mount:
     tip_id: int = 100
     arm_base_px: tuple = ()        # 基座轴在棋盘平面的投影
     arm_x_px: tuple = ()           # 沿机械臂零角方向的第二个平面点
+    raw: bool = False              # 用未压缩 YUYV：MJPG 压缩会打崩小角标检测，但更占 USB 带宽
 
     robot_center_px: tuple = ()     # 车体中心的地面投影像素
     robot_forward_px: tuple = ()    # 前方第二个地面点的像素
@@ -71,7 +72,9 @@ def frames(source, mount):
         if live and sys.platform.startswith("linux"):
             capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             # 两路 USB 摄像头共享总线时优先请求压缩帧；驱动可保留自己的默认格式。
-            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+            # 单相机（mount.raw）改用 YUYV：MJPG 的块效应会让小角标整帧读不出。
+            if not mount.raw:
+                capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         if live and mount.image_size:
             capture.set(cv2.CAP_PROP_FRAME_WIDTH, mount.image_size[0])
             capture.set(cv2.CAP_PROP_FRAME_HEIGHT, mount.image_size[1])

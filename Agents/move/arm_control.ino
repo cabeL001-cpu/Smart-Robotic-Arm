@@ -14,9 +14,10 @@ void setArmPulses(char *arguments) {
     Serial.println(F("OK ARM OFF"));
     return;
   }
-  // Servo 库把 attach 的 min 存为 int8_t，低于 36 µs 会溢出，下限反被钳到 1024 µs。
+  // Servo 库把 attach 的 min/max 按 4 µs 步长存成 int8：(544-min)/4 与 (2400-max)/4。
+  // 低于 36 µs 或高于 2908 µs 会溢出，限位反被钳到错误脉宽。
   if (SHOULDER_MIN_US < 36 || SHOULDER_MAX_US > 2500 || SHOULDER_MIN_US > SHOULDER_MAX_US ||
-      ELBOW_MIN_US < 500 || ELBOW_MAX_US > 2500 || ELBOW_MIN_US > ELBOW_MAX_US) {
+      ELBOW_MIN_US < 36 || ELBOW_MAX_US > 2700 || ELBOW_MIN_US > ELBOW_MAX_US) {
     Serial.println(F("ERR ARM CALIBRATION"));
     return;
   }
@@ -34,7 +35,7 @@ void setArmPulses(char *arguments) {
   noInterrupts();
   if (!shoulderServo.attached()) {
     shoulderServo.attach(SHOULDER_PIN, SHOULDER_MIN_US, 2500);
-    elbowServo.attach(ELBOW_PIN, ELBOW_MIN_US, 2500);
+    elbowServo.attach(ELBOW_PIN, ELBOW_MIN_US, ELBOW_MAX_US);
   }
   shoulderServo.writeMicroseconds(shoulderUs);
   elbowServo.writeMicroseconds(elbowUs);
