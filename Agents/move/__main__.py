@@ -32,6 +32,10 @@ def main():
         parser.exit(1, f"{error}。请在当前 Python 环境安装 move/requirements.txt 中的依赖。\n")
     except MotionBlocked as error:
         parser.exit(1, f"底盘因避障保持停车：{error}\n")
+    except TimeoutError as error:
+        parser.exit(1, f"Uno 没有回执：{error}\n"
+                       "先检查 HC-05 链路（rfcomm -a、hcitool con）和树莓派 5V 供电"
+                       "（vcgencmd get_throttled，0x50005 表示欠压）。\n")
     except OSError as error:
         parser.exit(1, f"串口控制失败：{error}\n")
     except KeyboardInterrupt:

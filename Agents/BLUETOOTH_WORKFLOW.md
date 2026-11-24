@@ -295,6 +295,8 @@ python -m move stop
 | `rfcomm connect` 报 `Host is down` | 模块没电、在 AT 模式或太远 | 查供电和灯色，靠近后重试 |
 | `rfcomm connect` 报 `Connection refused` | 链路密钥失效 | 重新配对：`remove` → 模块断电重上 → `pair`（1234）→ `trust` |
 | 有 `OK STOP` 但轮子不动 | 点动命令是否返回 `ERR OBSTACLE` 或 `ERR SONAR` | 用 `python -m move.sonar read` 核对方向和净空；若动作已收到 `DONE` 但车轮未转，断电检查底盘电源和对应 M 插座 |
+| 运行中偶发 `Uno 回执超时`，尤其底盘电机启动后 | `vcgencmd get_throttled`、`rfcomm -a`、`hcitool con` | 先看 5V 供电：`0x50005`（bit0+bit16）表示正在/曾经欠压，换 5V/3A 电源或给 HC-05 独立 5V 并共地；欠压会带着 Uno/HC-05 一起复位或掉链 |
+| `避障恢复失败，请手动发送 AVOID ON` | 同一次掉链已让 `AVOID ON` 回执丢失 | 链路恢复后执行 `python3 -m move --avoid on`；重定位已自动重连并重试一次，仍失败才提示手动 |
 
 ## 9. 回滚到 USB
 

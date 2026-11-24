@@ -47,7 +47,7 @@ def move(action: str, duration_ms: int = DEFAULT_DURATION_MS, *, port: str = DEF
             # 固件已切断四轮输出，保留阻挡原因交给上层决定下一步。
             raise
         except (KeyboardInterrupt, OSError):
-            with suppress(OSError):
+            with suppress(OSError, TimeoutError):
                 stop_wheels(connection)
             raise
 

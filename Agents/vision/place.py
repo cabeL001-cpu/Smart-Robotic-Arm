@@ -2,7 +2,8 @@
 
 可达集取 servo.CELL_SEEDS 的键（0、3、6、7、8）；1、2、4、5 交给车体闭环。
 method 可显式指定 arm 或 drive，跳过自动分流。一次串口、一路相机逐格执行，
-每格返回统一的 CellResult，带 method 标记实际使用的方式。
+每格返回统一的 CellResult，带 method 标记实际使用的方式。含车体微调时全程关闭
+超声避障并在结束时恢复，避免贴盘走车被误拦。
 """
 
 import argparse
@@ -19,8 +20,10 @@ from .servo import CELL_SEEDS, Servo, ServoConfig
 from .tags import Detector
 
 if "." in __package__:
+    from ..move import avoidance
     from ..uno import DEFAULT_PORT, open_uno
 else:
+    from move import avoidance
     from uno import DEFAULT_PORT, open_uno
 
 # 臂单独能够到的格：11-23 实测 0、3、6、7、8；其余格需要走车调整。
@@ -56,23 +59,37 @@ def place_cells(cells, *, method="auto", source, mount=None, port=DEFAULT_PORT, 
             if missing:
                 servo.measure_targets(range(9))
             driver = Driver(servo, config=drive_config, pulses=pulses, log=log)
+            plan = [(cell, "arm" if method == "arm" or (method == "auto" and cell in ARM_CELLS)
+                     else "drive") for cell in cells]
             results, held = [], None
-            for cell in cells:
-                if method == "arm" or (method == "auto" and cell in ARM_CELLS):
-                    placement = servo.place(cell, CELL_SEEDS.get(cell) or held)
-                    held = (placement.shoulder_us, placement.elbow_us)
-                    result = CellResult(cell, placement.ok, "arm", placement.error_mm,
-                                        held, placement.moves, placement.rms_px, placement.note)
-                else:
-                    driven = driver.place(cell)
-                    held = driven.pulses
-                    result = CellResult(cell, driven.ok, "drive", driven.error_mm,
-                                        driven.pulses, driven.moves, driven.rms_px, driven.note)
-                results.append(result)
-                if not result.ok:
-                    residual = "" if math.isnan(result.error_mm) else \
-                        f"，残余 {result.error_mm:.1f} mm"
-                    log(f"格 {cell}（{result.method}）未完成：{result.note}{residual}")
+            driven = any(how == "drive" for _, how in plan)
+            if driven:
+                # 贴盘走车必经围挡前，超声几乎必然误拦；结束时无条件恢复。
+                avoidance(False, link=connection)
+                log("含车体微调，避障已关闭，结束后恢复")
+            try:
+                for cell, how in plan:
+                    if how == "arm":
+                        placement = servo.place(cell, CELL_SEEDS.get(cell) or held)
+                        held = (placement.shoulder_us, placement.elbow_us)
+                        result = CellResult(cell, placement.ok, "arm", placement.error_mm,
+                                            held, placement.moves, placement.rms_px, placement.note)
+                    else:
+                        run = driver.place(cell)
+                        held = run.pulses
+                        result = CellResult(cell, run.ok, "drive", run.error_mm,
+                                            run.pulses, run.moves, run.rms_px, run.note)
+                    results.append(result)
+                    if not result.ok:
+                        residual = "" if math.isnan(result.error_mm) else \
+                            f"，残余 {result.error_mm:.1f} mm"
+                        log(f"格 {cell}（{result.method}）未完成：{result.note}{residual}")
+            finally:
+                if driven:
+                    try:
+                        avoidance(True, link=connection)
+                    except (OSError, TimeoutError):
+                        log("避障恢复失败，请手动发送 AVOID ON")
             if release:
                 servo.release()
             return results
@@ -99,12 +116,13 @@ def main():
                    help="肘部脉宽窗口，默认 500–2500")
     p.add_argument("--arm", type=int, nargs=2, default=list(DRIVE_PULSES), metavar=("肩µs", "肘µs"),
                    help="车体闭环时臂的固定脉宽，默认 360 1570")
-    p.add_argument("--drive-probe", type=int, default=300, help="测车体雅可比的底盘动作时长 ms")
+    p.add_argument("--drive-probe", type=int, default=200, help="测车体雅可比的底盘动作时长 ms")
     p.add_argument("--drive-sign", type=int, nargs=2, choices=(-1, 1), metavar=("前进", "左移"),
                    help="车体探测方向，-1 改为后退/右移")
-    p.add_argument("--drive-step", type=int, default=700, help="单次走车修正时长上限 ms")
+    p.add_argument("--drive-gain", type=float, default=0.8, help="车体单步修正阻尼")
+    p.add_argument("--drive-step", type=int, default=300, help="单次走车修正时长上限 ms")
     p.add_argument("--drive-tolerance", type=float, default=5.0, help="车体到位误差 mm")
-    p.add_argument("--drive-steps", type=int, default=8, help="车体每格迭代上限")
+    p.add_argument("--drive-steps", type=int, default=10, help="车体每格迭代上限")
     p.add_argument("--targets", help="每格目标 JSON，如 {\"4\": [100.3, 100.0]}")
     p.add_argument("--release", action="store_true", help="结束后 ARM OFF，臂会失去保持力矩")
     p.add_argument("--raw", action="store_true", help="相机用未压缩 YUYV；MJPG 会让小角标读不出")
@@ -125,6 +143,7 @@ def main():
                                probe_sign=tuple(args.probe_sign or (1, 1)), **windows)
     drive_config = DriveConfig(probe_ms=args.drive_probe,
                                probe_sign=tuple(args.drive_sign or (1, 1)),
+                               gain=args.drive_gain,
                                max_step_ms=args.drive_step, tolerance_mm=args.drive_tolerance,
                                max_steps=args.drive_steps)
     targets = json.load(open(args.targets, encoding="utf-8")) if args.targets else None

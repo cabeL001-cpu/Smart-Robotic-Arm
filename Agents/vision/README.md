@@ -80,12 +80,12 @@ python3 -m vision.align --source 0 --config rig.json --arm-config arm-calibratio
 
 ~~~bash
 python3 -m vision.servo --source 0 --measure                     # 只量数字位置，输出 JSON，不动舵机
-python3 -m vision.servo --source 0 --dry-run --cells 8 --targets ../board_targets.json
-python3 -m vision.servo --source 0 --cells 0 3 6 7 8 --raw --tolerance 2.5 \
-    --targets ../board_targets.json --port "$UNO_PORT"
+python3 -m vision.servo --source 0 --dry-run --cells 8 --targets board_targets.json
+python3 -m vision.servo --source 0 --cells 0 3 6 7 8 --raw --tolerance 4.0 \
+    --targets board_targets.json --port "$UNO_PORT"
 ~~~
 
-`--dry-run` 只输出当前末端毫米坐标和目标，不动舵机。入格分两步：**先摆到该格的实测预置位**（下表，写在 `vision/servo.py` 的 `CELL_SEEDS`），再按 `--probe-sign 肩 肘` 给对应轴加/减 `--probe` 微秒（撞到脉宽窗口会自动反向），实测 2×2 雅可比，按 `J·Δp = 目标 − 指尖` 迭代到 `--tolerance` 毫米内；单轴修正限幅 120/150 µs，脉宽钳在 `--shoulder`/`--elbow` 窗口（缺省 360–640 / 500–2500 µs）。**到达预置位或任一步后连续多帧看不到末端标签，就停在该处不再盲动**，输出 `note` 说明原因，并继续送下一格；不会用开环动作硬顶。`--start` 只作为没有预置位的格的兜底起点。默认格间保持力矩，结束也不自动 `ARM OFF`；需要解除时加 `--release`，先确认臂下方没有棋盘。
+`--dry-run` 只输出当前末端毫米坐标和目标，不动舵机。入格分两步：**先摆到该格的实测预置位**（下表，写在 `vision/servo.py` 的 `CELL_SEEDS`），再按 `--probe-sign 肩 肘` 给对应轴加/减 `--probe` 微秒（撞到脉宽窗口会自动反向），实测 2×2 雅可比，按 `J·Δp = 目标 − 指尖` 迭代到 `--tolerance` 毫米内；单轴修正限幅 120/150 µs，脉宽钳在 `--shoulder`/`--elbow` 窗口（缺省 360–640 / 500–2500 µs）。**到达预置位或任一步后连续多帧看不到末端标签，就停在该处不再盲动**，输出 `note` 说明原因，并继续送下一格；不会用开环动作硬顶。`TagNotVisible` 现在会写明是“棋盘角标不足”还是“末端不可见”，并列出最近一帧检测到的标签（如只有 `36h10:100` 就说明棋盘已不在视野里，而不是识别算法坏了）。`--start` 只作为没有预置位的格的兜底起点。默认格间保持力矩，结束也不自动 `ARM OFF`；需要解除时加 `--release`，先确认臂下方没有棋盘。
 
 11-23 实测预置位与闭环结果（顶摄 `/dev/video0`，`--raw`，误差相对印刷数字质心）：
 
@@ -101,26 +101,71 @@ python3 -m vision.servo --source 0 --cells 0 3 6 7 8 --raw --tolerance 2.5 \
 
 实测注意事项：20 µs 探测低于舵机静摩擦死区，末端几乎不动，`--probe` 用 60 µs；同一脉宽隔一段时间读数漂几毫米，且换接近方向后落点差约 12 mm（舵机回差），**纯脉宽重放达不到 6.7 mm，必须每格重新闭环**。容差取 2–2.5 mm。MJPG 编码会让小角标整帧读不出，实机用 `--raw` 走 YUYV。肩部实测窗口 360–640 µs（≤320 无动作、700 起抖动）；0 格并入肘部折叠支路后肩会顶到 360 下限，这是 0 格只能开环的原因之一。末端码被大臂遮挡是 0 格、也可能是个别姿态下的固有限制，遮挡时闭环按上文直接停止。[联调记录](../CALIBRATION_PRACTICE.md) 第 9 节
 
+## 全闭环入格（不依赖预置位）
+
+上一节的 `CELL_SEEDS` 只在车停回 11-23 标定位姿时有效。九宫格相对车体挪了位置（车没停准、换了停靠点、棋盘被移动），同一组预置脉宽会把末端送到别处，达不到也谈不上微调。`--closed` 不摆任何预置位：**给一组当前臂脉宽当起点，之后每一步都由当前画面里的棋盘角标与末端位置决定**，每格目标仍取当前视角下印刷数字的质心（`--measure` 先量一遍存成 JSON，或用 `--targets`）。
+
+~~~bash
+python3 -m vision.servo --source 0 --measure --raw               # 只在当前位置量印刷数字，不动臂
+python3 -m vision.servo --closed --start 500 1200 --cells 3 --raw \
+    --targets board_targets.json --port "$UNO_PORT"
+python3 -m vision.servo --closed --start 500 1200 --cells 0 3 6 7 8 --raw \
+    --targets board_targets.json --port "$UNO_PORT"
+~~~
+
+`--start 肩µs 肘µs` 是**当前臂所在脉宽**，必须给出：固件只能下发绝对脉宽，读不回当前位置，拿不到准确起点时先小步点动到能看到末端方块的位置再跑。流程：
+
+1. 起点连续多帧看不到末端方块时**一次也不动车**，直接返回 `ok=False`。
+2. 每轴自适应探测：从 `--probe`（缺省 60 µs）开始，位移低于 1.5 mm 就乘 1.6 倍重试（上限 `--probe-max` 240 µs），撞到脉宽窗口自动换向；**每轴测完回到基准脉宽再测另一轴**，探测不会把工作点越推越远。
+3. 每次观测连取 3 帧取中位数，帧间离散超过 1.5 mm 视为臂还在动或误检，重测而不是硬用。36h10 解不出时黑框回退可能在同一位置给出两个相近候选，首帧选定后其余帧按 `near` 贴住它，避免在候选间跳。
+4. 阻尼最小二乘 `J·Δp = gain·(目标 − 指尖)`，单步世界位移上限 6 mm；粗修正单轴 120/150 µs，末段收到 40/50 µs，脉宽钳在 `--shoulder`/`--elbow` 窗口。
+5. 末段退让默认关闭（`--approach-mm 0`）；开启时先从目标外侧该距离处接近，再折回目标，让最后一段的回差方向一致。到位后连续 `--hold`（缺省 3）次观测都在 `--tolerance`（缺省 4.0 mm，接近这台臂的有效重复精度）内才报 `ok`。
+6. 连续 3 次修正残余不再下降就停，`note` 报“目标可能不可达或卡在脉宽限位”；到脉宽窗口边缘会报“关节已到脉宽限位”。任一步看不到末端方块停在最后的脉宽；`Uno` 回执超时或蓝牙串口异常（`SerialException`）时臂实际位置不确定，停在最后一次确认位，**批量模式下停止继续送格**。
+
+与预置位模式相比的取舍：不再依赖标定姿态、不需要重扫预置位，代价是每格动作次数更多（每次探测含 2 次探出 + 2 次回位）、起点必须看得见末端、并且要人为给准起始脉宽。静摩擦死区约 20 µs，单步小于死区不会动，实际重复精度以毫米计；末端码一直被大臂遮挡的姿态（如部分 0 格）仍只能靠人工或车体微调。[离线仿真与设计记录](../CALIBRATION_PRACTICE.md) 9.9
+
+11-24 真车实测（格 8，起点 360/1920）：默认 2.0 mm 容差 + 3 mm 退让时 17 次动作仍未进容差，最后在肘 2050 丢掉末端；改成 4.0 mm、关闭退让后 9 次动作到位，残余 2.21 mm。跨格大行程受单步 6 mm 限制：从格 8 送格 6（约 140 mm）18 步只走约 88 mm，30 步预算下降到 7.3 mm 时蓝牙掉线；跨格仍应使用预置位/车体闭环，或把 `--max-steps` 放到 36–40。另注意格 8 的目标 `(177.7, 181.7)` 比 0–7 的网格大约偏 12–16 mm，使用前应现场核对。
+
 ## 车体微调入格
 
 `vision.drive` 把臂固定在一组脉宽（默认 360、1570 µs，指尖落在 7 格附近），不再动舵机，改用底盘前进/后退与左右平移把指尖挪进格心，适合臂单独够不到的 1、2、4、5 格。臂全程保持力矩，结束也不自动 `ARM OFF`。
 
 ~~~bash
-python3 -m vision.drive --source 0 --cells 1 4 --targets ../board_targets.json --raw
+python3 -m vision.drive --cells 1 4 --targets board_targets.json --raw
 ~~~
 
-雅可比改成底盘：先前进 `--probe` 毫秒、再左移同样时长，用指尖在棋盘上的位移实测毫米/毫秒两列（方向自动测出，不依赖车头朝向），再按 `J·Δt = 目标 − 指尖` 牛顿迭代，把毫秒数依次发给 `GO/BACK/LEFT/RIGHT`；单次修正限幅 `--max-step`（缺省 700 ms），容差 `--tolerance`（缺省 5 mm）。探测方向可用 `--probe-sign 前进 左移` 取 −1 改成后退/右移，`--arm 肩 肘` 可改固定脉宽。**走车后连续多帧看不到棋盘角标或末端，或固件报超声避障 `ERR OBSTACLE`，立即停车返回 `note` 说明原因，不再盲动。** 前进与平移在棋盘上接近同向（车头斜着）时雅可比被判为奇异，先把车摆正再跑。
+雅可比改成底盘：先前进 `--probe` 毫秒、再左移同样时长，用指尖在棋盘上的位移实测毫米/毫秒两列（方向自动测出，不依赖车头朝向），再按 `J·Δt = 目标 − 指尖` 牛顿迭代，把毫秒数依次发给 `GO/BACK/LEFT/RIGHT`；每步只走残差较大的那个轴，单次限幅 `--max-step`（缺省 300 ms），按 `--gain`（缺省 0.8）阻尼防越过，容差 `--tolerance`（缺省 5 mm）。探测方向可用 `--probe-sign 前进 左移` 取 −1 改成后退/右移，`--arm 肩 肘` 可改固定脉宽。**走车后连续多帧看不到棋盘角标或末端、观测位移和雅可比预测对不上、`OK MOVE` 回执超时（已补发 `STOP`），或固件报超声避障 `ERR OBSTACLE`，都立即停车返回 `note` 说明原因，不再盲动。** 相机随车走，指尖像素基本不变，所以每帧按上一位置的像素就近锁定末端，防止误锁到别的黑框。前进与平移在棋盘上接近同向（车头斜着）时雅可比被判为奇异，先把车摆正再跑。
+
+走车会贴近棋盘和围挡，超声几乎必然误拦：`vision.drive` 和 `vision.place` 在动车前自动发 `AVOID OFF`，结束时（含中途异常）恢复 `AVOID ON`，恢复失败只提示，不影响已完成的放置结果。
+
+## 车体回到标定位姿（放臂前对位）
+
+臂的预置脉宽 `CELL_SEEDS` 与可达带都是在 **11-23 那一次停车位姿**下实测的。车再开过来时如果停偏十几毫米或一两度，同一组脉宽的落点会漂，可达点也随之变差。`vision.reposition` 用顶摄里四个印刷角标把车微调回那次标定的位姿，臂不动，只挪车。
+
+参考像素来自标定 0/3/6/7/8 时拍的 `cell6_result.jpg`（1280×720），四个 printed5 中心写在 `vision/board_reference.json`。相机随车，所以角标在画面中的整体平移与旋转就代表车相对标定姿态的偏差。程序分别前进、左移、原地左转各 200 ms（`--probe`），实测每毫秒的角标像素位移得到 3×3 雅可比，再按 `J·Δt = 参考 − 当前` 最小二乘求三个轴的修正毫秒，乘 `--gain`（缺省 0.8）阻尼后依次执行，统一停车校验；每 5 步重测一次雅可比，平移 RMS 与转角分别进 `--tolerance`（缺省 4 px，约 1.7 mm）与 `--tolerance-deg`（缺省 1°）即完成。修正量低于 8 ms 车体回差时不再下发，只要残差仍在 2 倍容差内就按到位收尾，`note` 里写明实测 RMS 和转角。
+
+~~~bash
+python3 -m vision.reposition --raw --dry-run       # 只量当前偏差，不动车
+python3 -m vision.reposition --raw                 # 微调到标定位姿
+python3 -m vision.place --cells 3 6 7 8 --raw --targets board_targets.json
+~~~
+
+**先对位、再放臂**：`vision.reposition` 只调车不算格，归位后再跑 `vision.servo` / `vision.place` / `vision.drive`。分辨率必须与参考一致（1280×720），MJPG 会让小角标读不出，实机加 `--raw`。改相机安装、去畸变或换分辨率后，要用新照片重新量四个角标中心并更新 `board_reference.json`；换停靠位或换棋盘也要重拍。
+
+安全规则与车体闭环一致：起始平移偏差超过 150 px（约 60 mm）视为搬车、直接提示先开近，不动车；连续多帧看不到至少两个参考角标、与参考的转角超过 60° 或缩放/形状差太多、探测后角标几乎不动、动作后位移与雅可比预测不符、`OK MOVE` 回执超时（补发 `STOP`）或 `ERR OBSTACLE`，都立即停车返回 `note`，不盲动。回执超时若用的是程序自己打开的蓝牙链路，会自动重开 `/dev/rfcomm0`、重新 `STOP` 握手并按当前视觉重测后继续（缺省最多 2 次，`--` 无开关，见 `RepositionConfig.link_recoveries`）；复用外部 `link` 时不重连，直接中止。动车期间自动 `AVOID OFF`，结束（含异常）恢复 `AVOID ON`，失败会重连再试一次并提示手动 `python3 -m move --avoid on`。
+
+`连续 10 帧看不到至少 2 个棋盘角标` 现在的 `note` 会带上最近一帧到底检测到了什么（如 `最近一帧检测到 36h10:100`）以及参考角标数。只看到末端 `36h10:100`、没有任何 `printed5:*`，说明棋盘不在顶摄视野里（车离太远、镜头被挡、或相机安装变了），先把棋盘放回画面中央再跑；加 `--save-frame /tmp/reposition_fail.jpg` 可把失败前最后一帧存下来核对。若画面里棋盘明明可见仍报这个错，说明是曝光/尺寸问题，用存下的图对照 `--dry-run` 的角标位置决定是否重拍 `board_reference.json`。
 
 ## 统一入格入口
 
 `vision.place` 是一次调用送多格的入口。`--method auto`（缺省）按可达性分流：0、3、6、7、8 走臂闭环（`servo.place`），1、2、4、5 走车体闭环（`drive.Driver.place`）；`--method arm` 或 `--method drive` 强制只用一种。两者共用同一个串口和相机流，逐格输出 `CellResult`（`cell, ok, method, error_mm, pulses, moves, rms_px, note`），`method` 标明该格实际使用的方式。
 
 ~~~bash
-python3 -m vision.place --source 0 --cells 1 4 --targets ../board_targets.json --raw
-python3 -m vision.place --source 0 --cells 8 --method arm --targets ../board_targets.json
+python3 -m vision.place --cells 1 4 --targets board_targets.json --raw
+python3 -m vision.place --cells 8 --method arm --targets board_targets.json
 ~~~
 
-臂相关参数沿用 `vision.servo`（`--probe`、`--probe-sign`、`--tolerance`、`--max-steps`、`--shoulder`、`--elbow`），车体相关参数加 `--drive-` 前缀（`--drive-probe`、`--drive-sign`、`--drive-step`、`--drive-tolerance`、`--drive-steps`）；`--arm 肩 肘` 指定车体闭环时的固定臂脉宽。可达集 `ARM_CELLS` 直接取 `CELL_SEEDS` 的键，重扫预置位后自动并入分流。
+臂相关参数沿用 `vision.servo`（`--probe`、`--probe-sign`、`--tolerance`、`--max-steps`、`--shoulder`、`--elbow`），车体相关参数加 `--drive-` 前缀（`--drive-probe`、`--drive-sign`、`--drive-gain`、`--drive-step`、`--drive-tolerance`、`--drive-steps`）；`--arm 肩 肘` 指定车体闭环时的固定臂脉宽。只要本批含车体闭环，整批自动关避障、结束恢复。可达集 `ARM_CELLS` 直接取 `CELL_SEEDS` 的键，重扫预置位后自动并入分流。
 
 ## 机器人场地位姿
 

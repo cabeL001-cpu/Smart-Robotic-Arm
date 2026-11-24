@@ -22,7 +22,7 @@ python -m move.sonar read
 | 坐标导航 | `MHS.open_navigation` 在一次启动零点下依次执行 `nav.go_to_dock("A")` 或 `nav.go_to(x_m,y_m)`。IMU 粗定位、前摄整圈扫描和视觉微调共用 Uno 四向锁停 | [小车标定与运行](move/CALIBRATION.md) · [接口与参数](API.md) |
 | 四轮与避障 | `MHS.move(action, duration_ms)` 请求定时动作，Uno 按方向检查 SR09，到时停车或报告受阻。`python -m move.go_one_second` 会实际请求前进一秒；`python -m move.south_route` 跑南侧验收路线 | [接线、点动与一秒测试](move/README.md) |
 | 机械臂 | `MHS.arm(cell, config=cfg)` 规划肩、肘两轴。肩接 D13，肘接 D10，先用实测参数导出 Uno 限位 | [行程标定与验收](arm/README.md) |
-| 视觉 | 顶摄 `vision.arm`、`vision.robot`、`vision.align` 分别测末端、测车心和闭环到格；`vision.servo` 以印刷数字质心为格目标做臂雅可比迭代，末端可解码时用标签四角、否则用黑框四边形中心，`vision.drive` 固定臂走车微调够不到的格，`vision.place` 按可达性自动分流两种闭环。前摄 `vision.scan front` 读墙标像素，`vision.front` 由地图和内外参输出米制车心 | [相机设置与示例](vision/README.md) · [机械臂标定](arm/CALIBRATION.md) |
+| 视觉 | 顶摄 `vision.arm`、`vision.robot`、`vision.align` 分别测末端、测车心和闭环到格；`vision.servo` 以印刷数字质心为格目标做臂雅可比迭代（`--closed` 为不依赖预置位的全闭环，适合九宫格相对车体位移的情况），末端可解码时用标签四角、否则用黑框四边形中心，`vision.drive` 固定臂走车微调够不到的格，`vision.reposition` 用四个印刷角标把车微调回 11-23 标定 0/3/6/7/8 时的位姿，`vision.place` 按可达性自动分流两种闭环。前摄 `vision.scan front` 读墙标像素，`vision.front` 由地图和内外参输出米制车心 | [相机设置与示例](vision/README.md) · [机械臂标定](arm/CALIBRATION.md) |
 | IMU | `python -m move.imu` 输出平面位置与航向；`--vision-stdin` 可接收同机 `vision.robot` 的位姿修正；`python -m move.heading` 用累计航向分段修正直行偏航 | [采样、记录与回放](move/imu/README.md) |
 | 语音 | `MHS.listen()` 返回格号和动作，`MHS.say(text)` 播报文本，`listen_speak.say_event()` 播报预设事件 | [语音接口与自测](listen_speak/README.md) |
 

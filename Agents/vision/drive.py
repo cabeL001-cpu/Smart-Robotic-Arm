@@ -7,7 +7,7 @@ probe_ms，实测指尖在棋盘上的位移（毫米/毫秒）作为两列，�
 """
 
 import argparse
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import asdict, dataclass
 import json
 import math
@@ -21,28 +21,36 @@ from .servo import Servo, ServoConfig, TagNotVisible, clamp_pulses
 from .tags import Detector
 
 if "." in __package__:
-    from ..move import move as chassis_move
-    from ..uno import DEFAULT_PORT, MotionBlocked, open_uno
+    from ..move import avoidance, move as chassis_move
+    from ..uno import DEFAULT_PORT, MotionBlocked, open_uno, stop_wheels
 else:
-    from move import move as chassis_move
-    from uno import DEFAULT_PORT, MotionBlocked, open_uno
+    from move import avoidance, move as chassis_move
+    from uno import DEFAULT_PORT, MotionBlocked, open_uno, stop_wheels
 
 # 11-23 实测：臂停在此脉宽时指尖约在 (100, 167) mm，即 7 格附近。
 # 从这一姿态走车，可以把指尖送到 0、1、2、4、5 等臂单独够不到的格。
 DRIVE_PULSES = (360, 1570)
 # 每个轴的两种动作，索引 0/1 是正/负方向；probe_sign 取 -1 时整对调换。
 AXIS_ACTIONS = (("go", "back"), ("left", "right"))
+# 走车后指尖像素基本不变（相机随车），观测按上一位姿锁定，防止误锁其它黑框。
+TIP_TRACK_PX = 40.0
+
+
+class DriveAborted(RuntimeError):
+    """底盘链路或观测异常，已停车，不再继续动作。"""
 
 
 @dataclass(frozen=True)
 class DriveConfig:
-    probe_ms: int = 300              # 测雅可比的单次底盘动作时长
+    probe_ms: int = 200              # 测雅可比的单次底盘动作时长
     probe_sign: tuple = (1, 1)       # 前进、左移为正方向；-1 改为后退/右移
-    max_step_ms: int = 700           # 单次走车修正时长上限
+    gain: float = 0.8                # 单步修正阻尼，小于 1 防止越过目标
+    max_step_ms: int = 300           # 单次走车修正时长上限
+    min_step_ms: int = 5             # 低于此时长不再动作，避免在回差内来回
     tolerance_mm: float = 5.0
-    settle_s: float = 0.4            # 停车后丢弃旧帧的时长
-    max_steps: int = 8               # 每格最多迭代步数
-    refresh_steps: int = 3           # 每隔几步重测雅可比
+    settle_s: float = 0.6            # 停车后丢弃旧帧的时长，等臂停止摆动
+    max_steps: int = 10              # 每格最多迭代步数
+    refresh_steps: int = 4           # 每隔几步重测雅可比
 
 
 @dataclass(frozen=True)
@@ -69,26 +77,59 @@ class Driver:
 
     def _drive(self, axis, duration_ms):
         action = self.actions[axis][0] if duration_ms > 0 else self.actions[axis][1]
-        chassis_move(action, abs(duration_ms), link=self.servo.link)
+        try:
+            chassis_move(action, abs(duration_ms), link=self.servo.link)
+        except TimeoutError:
+            with suppress(OSError, TimeoutError):
+                stop_wheels(self.servo.link)
+            raise DriveAborted("Uno 回执超时，已发 STOP 停车") from None
         deadline = monotonic() + self.config.settle_s
         for stamp, _ in self.servo.stream:
             if stamp >= deadline:
                 return
 
-    def _probe(self, world):
+    def _track(self, tip):
+        """按上一位姿附近的像素锁定指尖，像素跳太远视为误检。"""
+        for _ in range(3):
+            tip_now, world, view = self.servo.observe(near=tip.px)
+            drift = math.hypot(tip_now.px[0] - tip.px[0], tip_now.px[1] - tip.px[1])
+            if drift <= TIP_TRACK_PX:
+                return tip_now, world, view
+            self.log(f"指尖像素跳 {drift:.0f} px，疑似误检，重试")
+        raise DriveAborted("指尖像素持续跳变，疑似误检，已停车")
+
+    def _observe_step(self, tip, world, predicted):
+        """走一步后校验世界位移：与雅可比预测差太多就按误检重试。"""
+        limit = max(25.0, 2.0 * float(np.linalg.norm(predicted)))
+        for _ in range(3):
+            tip_now, world_now, view = self._track(tip)
+            moved = world_now - world
+            if np.linalg.norm(moved - predicted) <= limit:
+                return tip_now, world_now, view
+            self.log(f"观测位移 {np.linalg.norm(moved):.1f} mm 与预测 "
+                     f"{np.linalg.norm(predicted):.1f} mm 不符，重试")
+        raise DriveAborted("观测与底盘动作不符，疑似误检，已停车")
+
+    def _probe(self, world, tip):
         """分别前进、左移一次，用指尖位移测出毫米/毫秒两列。"""
         columns, state = [], None
         for axis in (0, 1):
+            action = self.actions[axis][0]
             self._drive(axis, self.config.probe_ms)
-            tip, world_now, view = self.servo.observe()
+            tip_now, world_now, view = self._track(tip)
             moved = world_now - world
-            if np.linalg.norm(moved) < 1.0:
-                raise RuntimeError("底盘动作后末端几乎没动，检查车轮、电池和超声避障")
+            if np.linalg.norm(moved) < 2.0:
+                raise DriveAborted("底盘探测后指尖几乎没动，检查车轮、电池和蓝牙链路")
             columns.append(moved / self.config.probe_ms)
-            state = tip, world_now, view
+            self.log(f"探测 {action} {self.config.probe_ms} ms → 位移 "
+                     f"{np.linalg.norm(moved):.1f} mm")
+            tip, world, state = tip_now, world_now, (tip_now, world_now, view)
         jacobian = np.column_stack(columns)
+        self.log("车体雅可比 " + "，".join(
+            f"{self.actions[axis][0]} ({column[0]:+.3f}, {column[1]:+.3f}) mm/ms"
+            for axis, column in enumerate(columns)))
         if abs(np.linalg.det(jacobian)) < 1e-3:
-            raise RuntimeError("前进与平移在棋盘上几乎同向，雅可比接近奇异，先摆正车头")
+            raise DriveAborted("前进与平移在棋盘上几乎同向，雅可比接近奇异，先摆正车头")
         return (jacobian,) + state
 
     def place(self, cell, target=None):
@@ -118,34 +159,37 @@ class Driver:
                 if step == self.config.max_steps:
                     break
                 if jacobian is None or step % self.config.refresh_steps == 0:
-                    jacobian, tip, world, view = self._probe(world)
+                    jacobian, tip, world, view = self._probe(world, tip)
                     moves += 2
                     continue
-                step_ms = np.clip(np.linalg.solve(jacobian, error),
+                step_ms = np.clip(np.linalg.solve(jacobian, error) * self.config.gain,
                                   -self.config.max_step_ms, self.config.max_step_ms)
-                acted = False
-                for axis in (0, 1):
-                    duration = int(round(step_ms[axis]))
-                    if duration == 0:
-                        continue
-                    self._drive(axis, duration)
-                    moves += 1
-                    acted = True
-                    tip, world, view = self.servo.observe()
-                if not acted:
-                    return DriveResult(cell, False, float(np.linalg.norm(target - world)),
-                                       self.pulses, moves, view.rms_px,
-                                       "修正量不足 1 ms，车体分辨率到不了更细")
-                self.log(f"格 {cell}：第 {moves} 次动作 → 残余 "
+                axis = int(np.argmax(np.abs(step_ms)))
+                duration = int(round(step_ms[axis]))
+                if abs(duration) < self.config.min_step_ms:
+                    return DriveResult(cell, False, distance, self.pulses, moves, view.rms_px,
+                                       f"修正量低于 {self.config.min_step_ms} ms，"
+                                       "车体回差内不再动作")
+                action = self.actions[axis][0] if duration > 0 else self.actions[axis][1]
+                predicted = jacobian[:, axis] * duration
+                self._drive(axis, duration)
+                moves += 1
+                tip, world, view = self._observe_step(tip, world, predicted)
+                self.log(f"格 {cell}：{action} {abs(duration)} ms → 指尖 "
+                         f"({world[0]:.1f}, {world[1]:.1f}) mm，残余 "
                          f"{np.linalg.norm(target - world):.1f} mm")
         except TagNotVisible:
             self.log(f"格 {cell}：走车后看不到末端标签，已停车")
             return DriveResult(cell, False, float("nan"), self.pulses, moves, view.rms_px,
                                "看不到末端标签，已停车")
-        except MotionBlocked:
+        except MotionBlocked as exc:
             self.log(f"格 {cell}：超声避障拦下车体动作，已停车")
             return DriveResult(cell, False, float("nan"), self.pulses, moves, view.rms_px,
-                               "超声避障拦下车体动作，已停车")
+                               f"超声避障拦车，已停车：{exc}")
+        except DriveAborted as exc:
+            self.log(f"格 {cell}：{exc}")
+            return DriveResult(cell, False, float("nan"), self.pulses, moves, view.rms_px,
+                               str(exc))
         return DriveResult(cell, False, float(np.linalg.norm(target - world)),
                            self.pulses, moves, view.rms_px, "迭代次数用完仍未到位")
 
@@ -153,7 +197,11 @@ class Driver:
 def drive_cells(cells, *, source, mount=None, port=DEFAULT_PORT, link=None,
                 detector=None, servo_config=ServoConfig(), config=DriveConfig(),
                 targets=None, pulses=DRIVE_PULSES, release=False, log=print):
-    """按顺序走车送完各格。臂全程固定在 pulses，不自动 ARM OFF。"""
+    """按顺序走车送完各格。臂全程固定在 pulses，不自动 ARM OFF。
+
+    细走车会贴近棋盘和围挡，超声避障几乎必然误拦，所以全程关闭避障，结束时恢复；
+    恢复失败只提示，不影响已经完成的放置结果。
+    """
     with (nullcontext(link) if link is not None else open_uno(port)) as connection:
         servo = Servo(connection, source, mount, detector=detector, config=servo_config, log=log)
         try:
@@ -165,13 +213,21 @@ def drive_cells(cells, *, source, mount=None, port=DEFAULT_PORT, link=None,
                 servo.measure_targets(range(9))
             driver = Driver(servo, config=config, pulses=pulses, log=log)
             results = []
-            for cell in cells:
-                result = driver.place(cell)
-                results.append(result)
-                if not result.ok:
-                    residual = "" if math.isnan(result.error_mm) else \
-                        f"，残余 {result.error_mm:.1f} mm"
-                    log(f"格 {cell} 未完成：{result.note}{residual}")
+            avoidance(False, link=connection)
+            log("避障已关闭，结束后恢复")
+            try:
+                for cell in cells:
+                    result = driver.place(cell)
+                    results.append(result)
+                    if not result.ok:
+                        residual = "" if math.isnan(result.error_mm) else \
+                            f"，残余 {result.error_mm:.1f} mm"
+                        log(f"格 {cell} 未完成：{result.note}{residual}")
+            finally:
+                try:
+                    avoidance(True, link=connection)
+                except (OSError, TimeoutError):
+                    log("避障恢复失败，请手动发送 AVOID ON")
             if release:
                 servo.release()
             return results
@@ -185,12 +241,13 @@ def main():
     p.add_argument("--source", default="0")
     p.add_argument("--port", default=DEFAULT_PORT)
     p.add_argument("--config", help="安装参数 JSON，缺省按 1280×720 顶摄")
-    p.add_argument("--probe", type=int, default=300, help="测雅可比的底盘动作时长 ms")
+    p.add_argument("--probe", type=int, default=200, help="测雅可比的底盘动作时长 ms")
     p.add_argument("--probe-sign", type=int, nargs=2, choices=(-1, 1), metavar=("前进", "左移"),
                    help="探测方向，-1 改为后退/右移")
-    p.add_argument("--max-step", type=int, default=700, help="单次走车修正时长上限 ms")
+    p.add_argument("--gain", type=float, default=0.8, help="单步修正阻尼，小于 1 防越过目标")
+    p.add_argument("--max-step", type=int, default=300, help="单次走车修正时长上限 ms")
     p.add_argument("--tolerance", type=float, default=5.0, help="到位误差 mm")
-    p.add_argument("--max-steps", type=int, default=8, help="每格迭代上限")
+    p.add_argument("--max-steps", type=int, default=10, help="每格迭代上限")
     p.add_argument("--arm", type=int, nargs=2, default=list(DRIVE_PULSES), metavar=("肩µs", "肘µs"),
                    help="固定臂脉宽，默认 360 1570")
     p.add_argument("--targets", help="每格目标 JSON，如 {\"4\": [100.3, 100.0]}")
@@ -204,8 +261,8 @@ def main():
     if not mount.image_size:
         mount.image_size = (1280, 720)
     config = DriveConfig(probe_ms=args.probe, probe_sign=tuple(args.probe_sign or (1, 1)),
-                         max_step_ms=args.max_step, tolerance_mm=args.tolerance,
-                         max_steps=args.max_steps)
+                         gain=args.gain, max_step_ms=args.max_step,
+                         tolerance_mm=args.tolerance, max_steps=args.max_steps)
     targets = json.load(open(args.targets, encoding="utf-8")) if args.targets else None
 
     results = drive_cells(args.cells, source=args.source, mount=mount, port=args.port,

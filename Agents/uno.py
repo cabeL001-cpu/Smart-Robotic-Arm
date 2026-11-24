@@ -5,6 +5,9 @@ UNO_PORT 或命令行的 --port 改回 USB 串口（如 /dev/ttyACM0）。
 """
 
 import os
+import shutil
+import subprocess
+import sys
 from contextlib import contextmanager, suppress
 from time import monotonic, sleep
 
@@ -18,6 +21,28 @@ HANDSHAKE_SECONDS = 15
 
 class MotionBlocked(OSError):
     """Uno 已因方向净空不足或测距缺失而保持停车。"""
+
+
+_power_checked = False
+
+
+def warn_power():
+    """5V 欠压会让 HC-05 或 Uno 在底盘电机启动时掉线，每个进程只报一次。"""
+    global _power_checked
+    if _power_checked:
+        return
+    _power_checked = True
+    if not shutil.which("vcgencmd"):
+        return
+    try:
+        out = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True,
+                             text=True, timeout=2).stdout.strip()
+        value = int(out.split("=", 1)[1], 16)
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return
+    if value & (0x1 | 0x10000):
+        print(f"警告：树莓派 5V 欠压/降频（{out}），蓝牙和 Uno 会随机掉线；"
+              "先换 5V/3A 电源或给 HC-05 单独供电", file=sys.stderr)
 
 
 def stop_wheels(link, deadline=None):
@@ -40,7 +65,9 @@ def wait_reply(link, expected: bytes, seconds: float = 1, *, fields=False):
             raise MotionBlocked(reply.decode("ascii", errors="replace"))
         if reply and reply != b"OK STOP":
             raise OSError(f"Uno 返回 {reply!r}，期望 {expected!r}")
-    raise TimeoutError(f"等待 Uno 回执 {expected!r} 超时")
+    raise TimeoutError(
+        f"等待 Uno 回执 {expected!r} 超时；检查 HC-05 链路（rfcomm -a、hcitool con）"
+        "和树莓派 5V 供电（vcgencmd get_throttled，0x50005 表示欠压）")
 
 
 def _check_port(port):
@@ -70,6 +97,7 @@ def open_uno(port=DEFAULT_PORT):
     import serial
 
     _check_port(port)
+    warn_power()
     deadline = monotonic() + HANDSHAKE_SECONDS
     while True:
         link = _open_port(serial, port)

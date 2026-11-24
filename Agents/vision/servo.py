@@ -2,10 +2,18 @@
 
 末端标签可解码时直接用四角中心；顶摄读不出小标签时退到黑白方块的几何中心
 （见 CALIBRATION_PRACTICE 9.3）。每格目标是棋盘上印刷数字的质心（量出来存成数据，
-不用几何公式硬算），量不到时才退回几何格心。每格先摆到实测预置位 CELL_SEEDS，再按
-probe_sign 分别给肩、肘加/减 probe_us 测出 2×2 雅可比（毫米/微秒），按 J·Δp = 目标 − 指尖
-迭代；单轴限幅并钳在固件脉宽内。看不到末端标签就停在该处，不再盲动。到位后保持力矩
-不自动 ARM OFF，竖直臂悬空掉电会砸到棋盘。
+不用几何公式硬算），量不到时才退回几何格心。
+
+两种算法：
+
+- 带预置位（`place`/`place_cells`）：先摆到实测预置位 CELL_SEEDS 再闭环微调。
+  预置位只在车停在 11-23 标定位姿时有效。
+- 全闭环（`place_closed`/`place_closed_cells`）：不摆任何预置位，从当前已知脉宽
+  出发，靠视觉自适应探测、阻尼最小二乘和末段单向接近收敛；九宫格相对车体位置
+  变了也能用。代价是起点必须能看到末端方块，看不到就不动车。
+
+两种都看不到末端标签就停在该处，不再盲动。到位后保持力矩不自动 ARM OFF，
+竖直臂悬空掉电会砸到棋盘。
 """
 
 import argparse
@@ -21,7 +29,7 @@ import numpy as np
 from .arm import target_xy
 from .board import BOARD_LAYOUT, project
 from .camera import Mount, frames, live_source
-from .tags import Detector
+from .tags import Detector, describe
 
 if "." in __package__:
     from ..uno import DEFAULT_PORT, open_uno, wait_reply
@@ -212,6 +220,31 @@ class ServoConfig:
 
 
 @dataclass(frozen=True)
+class ClosedConfig:
+    """全闭环入格参数：不依赖预置位，所有动作都由视觉反馈决定。"""
+    probe_us: int = 60                   # 起始探测脉宽，位移太小会自动加大
+    probe_max_us: int = 240              # 自适应探测的脉宽上限
+    probe_min_mm: float = 1.5            # 探测位移下限，低于则加大探测
+    probe_sign: tuple = (1, 1)           # 首选的探测方向；撞窗口自动反向
+    samples: int = 3                     # 每次观测取几帧，用中位数抗噪声
+    max_spread_mm: float = 1.5           # 多帧离散上限，超过视为还在动或误检
+    gain: float = 0.9                    # 世界坐标步长的阻尼，小于 1 防越过
+    max_move_mm: float = 6.0             # 单步世界位移上限，保持线性化有效
+    max_step_us: tuple = (120, 150)      # 修正阶段单轴脉宽步长上限
+    final_step_us: tuple = (40, 50)      # 末段接近的单轴脉宽步长上限
+    tolerance_mm: float = 4.0            # 实测有效重复精度 3–4 mm；2 mm 会反复探测直至丢标签
+    approach_mm: float = 0.0             # 默认关闭；目标靠近可达边缘时退让反而恶化杠杆
+    approach_dir: tuple = (1.0, 1.0)     # 末段退让方向，棋盘坐标
+    approach_tolerance_mm: float = 1.5
+    approach_steps: int = 4              # 末段退让阶段的迭代上限
+    hold_frames: int = 3                 # 到位后连续复核的观测次数
+    max_steps: int = 18
+    refresh_steps: int = 10              # 每隔几步重测雅可比；探测会扰动工作点，不宜过密
+    shoulder_us: tuple = SHOULDER_RUN_US
+    elbow_us: tuple = ELBOW_RUN_US
+
+
+@dataclass(frozen=True)
 class Placement:
     cell: int
     ok: bool
@@ -237,6 +270,7 @@ class Servo:
         self.log = log
         self.stream = frames(source, self.mount)
         self.targets = {}           # 格号 → 棋盘毫米目标，缺省用印刷数字质心
+        self.pulses = None          # 最近一次下发的脉宽，用于失败时报告停车位置
 
     @property
     def limits(self):
@@ -271,6 +305,7 @@ class Servo:
     def _move(self, pulses):
         self.link.write(f"ARM {pulses[0]} {pulses[1]}\n".encode("ascii"))
         wait_reply(self.link, b"OK ARM")
+        self.pulses = (int(pulses[0]), int(pulses[1]))
         deadline = monotonic() + self.config.settle_s
         for stamp, _ in self.stream:
             if stamp >= deadline:
@@ -283,20 +318,30 @@ class Servo:
 
     def observe(self, near=None):
         """取当前帧的末端位置及其棋盘毫米坐标。"""
+        last_tags, last_view, last_tip = {}, False, False
         for _ in range(self.config.retries):
             try:
                 _, frame = next(self.stream)
             except StopIteration:
                 raise RuntimeError("图像流结束，闭环需要连续帧") from None
             tags = self.detector.detect(frame)
+            last_tags = tags
             view = board_view(tags)
             if view is None:
+                last_view, last_tip = False, False
                 continue
+            last_view = True
             tip = self._tag_tip(tags) or find_tip(frame, view.golden_px, near, view)
+            last_tip = tip is not None
             if tip is None:
                 continue
             return tip, project(view.to_world, [tip.px])[0], view
-        raise TagNotVisible("连续多帧未同时看到棋盘角标与末端方块，检查视野与曝光")
+        missing = [text for ok, text in ((last_view, "棋盘角标不足"),
+                                         (last_tip, "末端不可见")) if not ok]
+        raise TagNotVisible(
+            f"连续 {self.config.retries} 帧未同时看到棋盘角标与末端方块"
+            f"（{'；'.join(missing) or '同帧未同时满足'}；最近一帧检测到 "
+            f"{describe(last_tags)}），检查视野与曝光")
 
     def _tag_tip(self, tags):
         """末端标签可解码时直接取四角中心，比黑框方块稳定。"""
@@ -395,6 +440,255 @@ class Servo:
         return Placement(cell, False, float(np.linalg.norm(target - world)),
                          pulses[0], pulses[1], moves, view.rms_px, "迭代次数用完仍未到位")
 
+    # ---- 全闭环入格：不摆预置位，所有动作都由视觉反馈决定 ----
+
+    def _clamp_to_window(self, pulses, config):
+        limits = ((max(config.shoulder_us[0], SHOULDER_MIN_US),
+                   min(config.shoulder_us[1], SHOULDER_MAX_US)),
+                  (max(config.elbow_us[0], ELBOW_MIN_US),
+                   min(config.elbow_us[1], ELBOW_MAX_US)))
+        return clamp_pulses(float(pulses[0]), float(pulses[1]), limits)
+
+    def _observe_median(self, config, near=None):
+        """连取多帧取中位数，抑制标签抖动；离散太大说明臂还在动或误检。
+
+        36h10 解不出时黑框回退会在同一位置给出两个相差约 10 px 的候选，
+        逐帧独立选“最大候选”会在两者之间跳。第一帧选定后让后续帧按 near
+        贴住它，保证同组样本来自同一个候选。
+        """
+        last = None
+        for _ in range(3):
+            samples = []
+            anchor = near
+            try:
+                for _ in range(config.samples):
+                    sample = self.observe(anchor)
+                    samples.append(sample)
+                    anchor = sample[0].px
+            except TagNotVisible as exc:
+                last = exc
+                continue
+            worlds = np.array([world for _, world, _ in samples])
+            center = np.median(worlds, axis=0)
+            spread = float(np.max(np.linalg.norm(worlds - center, axis=1)))
+            if spread <= config.max_spread_mm:
+                index = int(np.argmin(np.linalg.norm(worlds - center, axis=1)))
+                tip, _, view = samples[index]
+                return tip, center, view
+        if last is not None:
+            raise last
+        raise RuntimeError("末端读数跳动过大，疑似臂还在动或误检，已停")
+
+    def _probe_axis(self, pulses, axis, tip, world, view, config):
+        """沿单轴自适应探测：位移低于阈值就加大脉宽重试，偏出窗口自动换向。"""
+        limits = ((max(config.shoulder_us[0], SHOULDER_MIN_US),
+                   min(config.shoulder_us[1], SHOULDER_MAX_US)),
+                  (max(config.elbow_us[0], ELBOW_MIN_US),
+                   min(config.elbow_us[1], ELBOW_MAX_US)))
+        low, high = limits[axis]
+        base_world, base_pulse = world, pulses[axis]
+        sign, amplitude, used = config.probe_sign[axis], config.probe_us, 0
+        for _ in range(4):
+            guess = base_pulse + sign * amplitude
+            if not low <= guess <= high:
+                sign = -sign
+                guess = base_pulse + sign * amplitude
+            guess = int(round(min(max(guess, low), high)))
+            delta = guess - base_pulse
+            if abs(delta) < 15:
+                raise RuntimeError("可用脉宽窗口太窄，无法测雅可比，先松开行程")
+            nxt = list(pulses)
+            nxt[axis] = guess
+            nxt = tuple(nxt)
+            self._move(nxt)
+            used += 1
+            try:
+                tip, world, view = self._observe_median(config, near=tip.px)
+            except TagNotVisible:
+                raise TagNotVisible("探测时看不到末端方块", nxt) from None
+            moved = world - base_world
+            if float(np.linalg.norm(moved)) >= config.probe_min_mm:
+                return moved / delta, nxt, tip, world, view, used
+            self.log(f"关节 {axis} 加 {abs(delta)} µs 只动了 "
+                     f"{np.linalg.norm(moved):.1f} mm，加大探测")
+            amplitude = min(config.probe_max_us, int(round(amplitude * 1.6)))
+        raise RuntimeError("加大探测脉宽后末端仍几乎不动，检查舵机供电、接线或卡滞")
+
+    def _probe_closed(self, pulses, tip, world, view, config):
+        """顺序测两轴雅可比，测完回到基准脉宽，探测不改动工作点。
+
+        每列都相对该次动作前的实测位置计算，不受另一轴回程污染；单轴测完先回
+        基准脉宽再测下一轴，否则探测的 +probe_us 会让臂每轮向前爬一个探测步。
+        """
+        base = tuple(int(v) for v in pulses)
+        columns, used = [], 0
+        for axis in (0, 1):
+            column, probed, tip, world, view, count = self._probe_axis(
+                base, axis, tip, world, view, config)
+            columns.append(column)
+            used += count
+            if probed != base:
+                self._move(base)
+                used += 1
+                try:
+                    tip, world, view = self._observe_median(config, near=tip.px)
+                except TagNotVisible:
+                    raise TagNotVisible("探测回位时看不到末端方块", base) from None
+        jacobian = np.column_stack(columns)
+        singular = np.linalg.svd(jacobian, compute_uv=False)
+        if singular[-1] < 1e-4 or singular[-1] < 0.01 * singular[0]:
+            raise RuntimeError("雅可比接近奇异，末端在可达边界，先把臂移到棋盘上方再试")
+        return jacobian, pulses, tip, world, view, used
+
+    def _servo_phase(self, aim, *, tolerance_mm, budget, final, pulses, tip, world, view,
+                     jacobian, moves, config):
+        """阻尼最小二乘把末端迭代到 aim 的 tolerance 内；返回更新后的状态。"""
+        best, stale = float("inf"), 0
+        for step in range(budget):
+            error = aim - world
+            distance = float(np.linalg.norm(error))
+            if distance <= tolerance_mm:
+                return True, "", pulses, tip, world, view, jacobian, moves
+            try:
+                if jacobian is None or (step > 0 and step % config.refresh_steps == 0):
+                    jacobian, pulses, tip, world, view, count = self._probe_closed(
+                        pulses, tip, world, view, config)
+                    moves += count
+                    self.log(f"雅可比探测完成，当前 ({world[0]:.1f}, {world[1]:.1f}) mm，"
+                             f"残余 {np.linalg.norm(aim - world):.1f} mm")
+                    # 探测本身会扰动工作点，不算“没有进步”，否则末段容易被误判停滞
+                    continue
+                if distance + 0.2 < best:
+                    best, stale = distance, 0
+                else:
+                    stale += 1
+                    if stale >= 3:
+                        return (False, f"残余不再下降（{distance:.1f} mm），"
+                                "目标可能不可达或卡在脉宽限位",
+                                pulses, tip, world, view, jacobian, moves)
+                step_world = error * config.gain
+                length = float(np.linalg.norm(step_world))
+                if length > config.max_move_mm:
+                    step_world *= config.max_move_mm / length
+                dpulses = np.linalg.lstsq(jacobian, step_world, rcond=None)[0]
+                cap = np.asarray(config.final_step_us if final else config.max_step_us,
+                                 dtype=float)
+                dpulses = np.clip(dpulses, -cap, cap)
+                nxt = self._clamp_to_window(
+                    np.asarray(pulses, dtype=float) + dpulses, config)
+                if nxt == pulses:
+                    return (False, f"关节已到脉宽限位，残余 {distance:.1f} mm",
+                            pulses, tip, world, view, jacobian, moves)
+                predicted = jacobian @ (np.asarray(nxt, dtype=float)
+                                        - np.asarray(pulses, dtype=float))
+                before = world
+                self._move(nxt)
+                pulses = nxt
+                moves += 1
+                tip, world, view = self._observe_median(config, near=tip.px)
+                if (np.linalg.norm((world - before) - predicted)
+                        > max(3.0, 0.6 * float(np.linalg.norm(predicted)))):
+                    jacobian = None          # 回差或误检，下次先重测
+            except TagNotVisible as exc:
+                raise TagNotVisible(str(exc), exc.pulses or pulses) from None
+        distance = float(np.linalg.norm(aim - world))
+        return (False, f"{budget} 步内未进入 {tolerance_mm:.1f} mm（残余 {distance:.1f} mm）",
+                pulses, tip, world, view, jacobian, moves)
+
+    def _verify(self, target, pulses, tip, world, view, jacobian, moves, config):
+        """到位后连续多帧复核，防止回差或误检造成假到位。"""
+        for _ in range(2):
+            good, error = 0, float(np.linalg.norm(target - world))
+            for _ in range(config.hold_frames + 2):
+                tip, world, view = self._observe_median(config, near=tip.px)
+                error = float(np.linalg.norm(target - world))
+                good = good + 1 if error <= config.tolerance_mm else 0
+                if good >= config.hold_frames:
+                    return True, error, pulses, tip, world, view, jacobian, moves
+            ok, reason, pulses, tip, world, view, jacobian, moves = self._servo_phase(
+                target, tolerance_mm=config.tolerance_mm, budget=4, final=True,
+                pulses=pulses, tip=tip, world=world, view=view, jacobian=jacobian,
+                moves=moves, config=config)
+            if not ok:
+                return False, error, pulses, tip, world, view, jacobian, moves
+        error = float(np.linalg.norm(target - world))
+        return error <= config.tolerance_mm, error, pulses, tip, world, view, jacobian, moves
+
+    def place_closed(self, cell, *, start, target=None, config=ClosedConfig()):
+        """全闭环入格：从当前已知脉宽 start 直接视觉伺服到目标，不摆预置位。
+
+        起点看不到末端方块就一次也不动；九宫格相对车体位置变了（车没回到标定
+        位姿）也能用。approach_mm 大于 0 时末段先从目标外侧该距离处接近，让
+        最后一段的回差方向一致；默认 0（关闭，近可达边缘时退让会恶化杠杆）。
+        最后用连续多帧复核到位。
+        """
+        if target is None:
+            target = self.targets.get(cell)
+        if target is None:
+            target = target_xy(cell)
+        target = np.asarray(target, dtype=float)
+        pulses = self._clamp_to_window(np.asarray(start, dtype=float), config)
+        self.pulses = pulses
+        moves, jacobian = 0, None
+        try:
+            tip, world, view = self._observe_median(config)
+        except TagNotVisible:
+            self.log(f"格 {cell}：起点看不到末端方块，未动车")
+            return Placement(cell, False, float("nan"), pulses[0], pulses[1], 0,
+                             float("nan"), "起点看不到末端方块，未动车")
+        except RuntimeError as exc:
+            return Placement(cell, False, float("nan"), pulses[0], pulses[1], 0,
+                             float("nan"), str(exc))
+        self.log(f"格 {cell}：目标 ({target[0]:.1f}, {target[1]:.1f}) mm，起点 {pulses}，"
+                 f"末端 ({world[0]:.1f}, {world[1]:.1f}) mm，角标重投影 {view.rms_px:.2f} px")
+        try:
+            if config.approach_mm > 0:
+                direction = np.asarray(config.approach_dir, dtype=float)
+                direction = direction / np.linalg.norm(direction)
+                back = target + direction * config.approach_mm
+                ok, reason, pulses, tip, world, view, jacobian, moves = self._servo_phase(
+                    back, tolerance_mm=config.approach_tolerance_mm,
+                    budget=config.approach_steps, final=False,
+                    pulses=pulses, tip=tip, world=world, view=view, jacobian=jacobian,
+                    moves=moves, config=config)
+                if not ok:
+                    self.log(f"格 {cell}：外侧接近不完整（{reason}），直接从当前位修正")
+            ok, reason, pulses, tip, world, view, jacobian, moves = self._servo_phase(
+                target, tolerance_mm=config.tolerance_mm, budget=config.max_steps,
+                final=True, pulses=pulses, tip=tip, world=world, view=view,
+                jacobian=jacobian, moves=moves, config=config)
+            if not ok:
+                return Placement(cell, False, float(np.linalg.norm(target - world)),
+                                 pulses[0], pulses[1], moves, view.rms_px, reason)
+            ok, error, pulses, tip, world, view, jacobian, moves = self._verify(
+                target, pulses, tip, world, view, jacobian, moves, config)
+            if not ok:
+                return Placement(cell, False, error, pulses[0], pulses[1], moves,
+                                 view.rms_px, "到位后复核仍超出容差")
+            self.log(f"格 {cell}：全闭环到位，残余 {error:.2f} mm，共 {moves} 次动作")
+            return Placement(cell, True, error, pulses[0], pulses[1], moves, view.rms_px)
+        except TagNotVisible as exc:
+            stopped = exc.pulses or self.pulses or pulses
+            self.log(f"格 {cell}：动作 {moves} 次后看不到末端方块，停在 {stopped}")
+            return Placement(cell, False, float("nan"), stopped[0], stopped[1], moves,
+                             float("nan"), "看不到末端方块，停在当前脉宽")
+        except TimeoutError:
+            stopped = self.pulses or pulses
+            self.log(f"格 {cell}：Uno 回执超时，停在最后一次指令 {stopped}")
+            return Placement(cell, False, float("nan"), stopped[0], stopped[1], moves,
+                             float("nan"), "Uno 回执超时，臂停在最后一次指令位")
+        except OSError as exc:
+            # 蓝牙 SPP 掉线时 pyserial 抛 SerialException（OSError 子类）。
+            # 只有回执确认过的脉宽才可信，失败那一条指令可能没到 Uno。
+            stopped = self.pulses or pulses
+            self.log(f"格 {cell}：Uno 通信异常（{exc}），停在最后一次确认位 {stopped}")
+            return Placement(cell, False, float("nan"), stopped[0], stopped[1], moves,
+                             float("nan"), "Uno 通信异常，臂停在最后一次确认位")
+        except RuntimeError as exc:
+            self.log(f"格 {cell}：全闭环中止：{exc}")
+            return Placement(cell, False, float("nan"), pulses[0], pulses[1], moves,
+                             view.rms_px, str(exc))
+
 
 def place_cells(cells, *, start=None, source, mount=None, port=DEFAULT_PORT, link=None,
                 detector=None, config=ServoConfig(), targets=None, release=False, log=print):
@@ -428,19 +722,65 @@ def place_cells(cells, *, start=None, source, mount=None, port=DEFAULT_PORT, lin
             servo.close()
 
 
+def place_closed_cells(cells, *, start=None, source, mount=None, port=DEFAULT_PORT, link=None,
+                       detector=None, config=ClosedConfig(), targets=None, release=False,
+                       log=print):
+    """全闭环逐格：不摆 CELL_SEEDS，第一格须给当前臂脉宽 start，之后沿用上一格终点。
+
+    每一格都从上一格停下的脉宽直接视觉伺服；目标仍按当前画面里的印刷数字质心。
+    起点看不到末端方块时不动车，返回未完成，再接着送下一格。
+    """
+    if start is None:
+        raise ValueError("全闭环入格需要当前臂脉宽作为起点，请给 start（CLI: --start 肩µs 肘µs）")
+    with (nullcontext(link) if link is not None else open_uno(port)) as connection:
+        servo = Servo(connection, source, mount, detector=detector, log=log)
+        try:
+            if targets:
+                servo.targets.update({int(cell): np.asarray(xy, dtype=float)
+                                      for cell, xy in targets.items()})
+            missing = [cell for cell in cells if cell not in servo.targets]
+            if missing:
+                servo.measure_targets(range(9))
+            pulses, placements = tuple(start), []
+            for cell in cells:
+                placement = servo.place_closed(cell, start=pulses, config=config)
+                placements.append(placement)
+                pulses = placement.shoulder_us, placement.elbow_us
+                if not placement.ok:
+                    residual = "" if math.isnan(placement.error_mm) else \
+                        f"，残余 {placement.error_mm:.1f} mm"
+                    log(f"格 {cell} 未完成：{placement.note}{residual}")
+                    if "超时" in placement.note or "通信" in placement.note:
+                        log("Uno 通信中断后臂实际位置不确定，停止继续送格")
+                        break
+            if release:
+                servo.release()
+            return placements
+        finally:
+            servo.close()
+
+
 def main():
     p = argparse.ArgumentParser(description="顶摄闭环把末端方块送入九宫格格心")
     p.add_argument("--cells", type=int, nargs="+", default=[4], choices=range(9))
     p.add_argument("--start", type=int, nargs=2, metavar=("肩µs", "肘µs"),
-                   help="兜底起点；缺省每格先用 CELL_SEEDS 预置位")
+                   help="起点；缺省每格先用 CELL_SEEDS 预置位。--closed 时是当前臂脉宽，必须给出")
+    p.add_argument("--closed", action="store_true",
+                   help="全闭环：不摆预置位，从 --start 当前脉宽直接视觉伺服（九宫格位移时用）")
     p.add_argument("--source", default="0")
     p.add_argument("--port", default=DEFAULT_PORT)
     p.add_argument("--config", help="安装参数 JSON，缺省按 1280×720 顶摄")
-    p.add_argument("--probe", type=int, default=60, help="雅可比探测脉宽")
+    p.add_argument("--probe", type=int, default=60, help="雅可比探测起始脉宽")
+    p.add_argument("--probe-max", type=int, default=240, help="全闭环自适应探测脉宽上限")
     p.add_argument("--probe-sign", type=int, nargs=2, choices=(-1, 1), metavar=("肩", "肘"),
                    help="探测方向，取 -1 往脉宽减小方向探，避开棋盘角标时用")
-    p.add_argument("--tolerance", type=float, default=4.0, help="到位误差 mm")
-    p.add_argument("--max-steps", type=int, default=6, help="每格迭代上限")
+    p.add_argument("--tolerance", type=float, default=None,
+                   help="到位误差 mm，缺省 4.0（两种闭环一致，实测有效重复精度）")
+    p.add_argument("--max-steps", type=int, default=None,
+                   help="每格迭代上限，缺省预置位闭环 6、全闭环 18（跨格长距离需 30 以上）")
+    p.add_argument("--approach-mm", type=float, default=0.0,
+                   help="全闭环末段退让距离，默认 0（关闭）；贴近可达边缘时不要开")
+    p.add_argument("--hold", type=int, default=3, help="全闭环到位后连续复核次数")
     p.add_argument("--shoulder", type=int, nargs=2, metavar=("最小µs", "最大µs"),
                    help="肩部脉宽窗口，默认 360–640（实测机械可用窗口）")
     p.add_argument("--elbow", type=int, nargs=2, metavar=("最小µs", "最大µs"),
@@ -462,11 +802,24 @@ def main():
         windows["shoulder_us"] = tuple(args.shoulder)
     if args.elbow:
         windows["elbow_us"] = tuple(args.elbow)
-    config = ServoConfig(probe_us=args.probe, tolerance_mm=args.tolerance,
-                         max_steps=args.max_steps,
+    config = ServoConfig(probe_us=args.probe,
+                         tolerance_mm=args.tolerance if args.tolerance is not None else 4.0,
+                         max_steps=args.max_steps if args.max_steps is not None else 6,
                          probe_sign=tuple(args.probe_sign or (1, 1)), **windows)
+    closed_config = ClosedConfig(probe_us=args.probe, probe_max_us=args.probe_max,
+                                 probe_sign=tuple(args.probe_sign or (1, 1)),
+                                 tolerance_mm=(args.tolerance if args.tolerance is not None
+                                               else 4.0),
+                                 max_steps=args.max_steps if args.max_steps is not None else 18,
+                                 approach_mm=args.approach_mm, hold_frames=args.hold,
+                                 **windows)
     detector = Detector(("36h11", "36h10"))
     targets = json.load(open(args.targets, encoding="utf-8")) if args.targets else None
+
+    if args.closed and not args.start and not (args.dry_run or args.measure):
+        p.error("--closed 需要 --start 当前肩肘脉宽：固件只能下发绝对脉宽，读不回当前位置")
+    if args.closed and args.dry_run:
+        p.error("--closed 是动车模式，只测量请去掉 --closed 直接 --dry-run")
 
     if args.dry_run or args.measure:
         servo = Servo(None, args.source, mount, detector=detector, config=config)
@@ -493,10 +846,16 @@ def main():
             servo.close()
         return
 
-    placements = place_cells(args.cells, start=tuple(args.start) if args.start else None,
-                             source=args.source, mount=mount, port=args.port,
-                             detector=detector, config=config, targets=targets,
-                             release=args.release)
+    if args.closed:
+        placements = place_closed_cells(args.cells, start=tuple(args.start), source=args.source,
+                                        mount=mount, port=args.port, detector=detector,
+                                        config=closed_config, targets=targets,
+                                        release=args.release)
+    else:
+        placements = place_cells(args.cells, start=tuple(args.start) if args.start else None,
+                                 source=args.source, mount=mount, port=args.port,
+                                 detector=detector, config=config, targets=targets,
+                                 release=args.release)
     for placement in placements:
         print(json.dumps(asdict(placement), ensure_ascii=False))
 
