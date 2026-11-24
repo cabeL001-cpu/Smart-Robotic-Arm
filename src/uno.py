@@ -75,7 +75,7 @@ def _check_port(port):
     if port.startswith("/dev/") and not os.path.exists(port):
         raise OSError(
             f"{port} 不存在。HC-05 需先在树莓派上配对并绑定："
-            "在 src 目录运行 sh bt_link.sh bind，或手工执行 "
+            "在 src 目录运行 sh bt_link.sh bind sjtu013，或手工执行 "
             "sudo rfcomm bind rfcomm0 <MAC> 1。USB 台架调试可设 UNO_PORT=/dev/ttyACM0。"
         )
 

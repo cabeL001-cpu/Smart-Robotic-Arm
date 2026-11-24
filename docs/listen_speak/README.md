@@ -4,6 +4,7 @@
 
 把一句话变成一条结构化指令，并负责机器人的语音播报。
 
+- **唤醒监听**：听到“小伙小伙”之前只做语音识别，不触发任何检测或运动
 - **语音识别**：麦克风录音 → 能量 VAD 断句 → Vosk 离线识别
 - **指令解析**：识别文本 → DeepSeek Flash → 校验 → `(格数, 动作)`
 - **语音播报**优先播放缓存。需要合成时，在线使用 edge-tts，离线使用 Piper，Piper 失败后使用 espeak-ng。
@@ -22,34 +23,55 @@ result = listen()
 
 | 情况 | 返回值 |
 |---|---|
-| 正常识别 | `("4", "arrive")` |
+| 正常识别 | `("3", "arrive")` |
 | 空指令（用户说不用了、待机等） | `(None, None)` |
 | 网络离线 | `(None, None)`（已播报"网络离线，机器暂时无法使用"） |
 | API Key 未配置 | `(None, None)`（已播报"大模型未配置"） |
-| 没听清 / 解析失败 | `(None, None)`（已播报"没听清，请再说一遍"） |
+| 没听清 / 解析失败 / 格号不可达 | `(None, None)`（已播报"没听清，请再说一遍"） |
 
-- **格数**：`"0"` ~ `"8"`，字符串
+- **格数**：字符串，只接受 `"0"`、`"3"`、`"6"`、`"7"`、`"8"`（这几格臂能闭环到位）；
+  说 `1/2/4/5` 会按识别失败处理，让用户重说
 - **动作**：固定字符串 `"arrive"`
-- A-D 停靠可由上层调用 `MHS.dispatch(("A", "arrive"), navigator=nav)`。本模块的语音分类目前只产生 0–8 格号。[系统调用示例](../API.md)
+- A-D 停靠可由上层调用 `MHS.dispatch(("A", "arrive"), navigator=nav)`。本模块的语音分类目前只产生上述五个格号。[系统调用示例](../API.md)
+
+总控（`python -m task`）唤醒后逐句处理，不等静音窗口攒句子：
+
+```python
+from listen_speak import wait_for_wake, recognize, understand
+
+wait_for_wake()        # 阻塞，直到听到 WAKE_WORDS（默认“小伙小伙”）；每轮等开口 LISTEN_TIMEOUT 秒
+text = recognize(7.0)  # 录一句话：最多等 7 s 开口，说完静音 1 s 断句；没听清返回 ""
+cell, action = understand(text)   # 只调用大模型并校验，不录音、不播报；失败返回 (None, None)
+```
+
+- 总控只要 `recognize()` 返回非空文字就立刻调用 `understand()`；返回空（纯噪声或没听到人声）就跳过这一轮继续听，不播报、不要求重新说唤醒词。
+- `collect()` 仍保留为独立接口：它把连续多句攒到 7 s 静音窗口结束再返回，适合需要整段文本的场景；总控已不再使用。
+- `understand()` 对“离线/未配置/格式错/接口报错”都返回 `(None, None)`，但会先在终端打印 `大模型未处理口令：<原因>`；总控自己用 `is_online()` 决定播报“网络离线”还是“没有听到指令”。
 
 播报接口：
 
 ```python
-say_event("start", number="4")          # 开始执行任务，目标4号格
-say_event("arrive", number="4")         # 已到达4号位置
+say_event("start", number="3")          # 开始执行任务，目标3号格
+say_event("arrive", number="3")         # 已到达3号位置
 say_event("complete")                   # 任务完成
 say_event("fail", reason="未到位")       # 任务失败，未到位
 say_event("offline", offline=True)      # 网络离线，机器暂时无法使用
+say_event("wake")                       # 您好，有什么事，很高兴为您服务
+say_event("moving")                     # 开始移动
+say_event("arrived")                    # 已抵达地点
+say_event("cell", number="3")           # 已抵达3号位
+say_event("no_command")                 # 没有听到指令，请再说一遍
 ```
 
 ## 三、目录结构
 
 ```
 listen_speak/
-├── __init__.py        # 对外接口 listen / speak / say_event
-├── config.py          # 所有配置（API Key 在这里填）
+├── __init__.py        # 对外接口 listen / wait_for_wake / collect / understand / speak / say_event
+├── config.py          # 所有配置（API Key 读环境变量 DEEPSEEK_API_KEY）
 ├── asr.py             # 语音识别：arecord + VAD + Vosk
-├── llm.py             # 大模型调用与结果校验
+├── llm.py             # 大模型调用与结果校验（含“零”同音字修正、可达格号白名单）
+├── test_llm.py        # llm 的离线单元测试，不联网
 ├── tts.py             # 语音合成与播放
 ├── requirements.txt   # Python 依赖
 ├── README.md          # 本文件
@@ -70,13 +92,13 @@ listen()
   │     │
   │     └─ 没听到人声 ──────────→ 播报"没听清…"     → (None, None)
   │
-  ├─ 文本 → DeepSeek Flash（JSON 模式）
+  ├─ 文本 → 同音字修正（“林浩格”→“0号格”）→ DeepSeek Flash（JSON 模式）
   │
   ├─ 校验 action / number
-  │     ├─ 非法 ────────────────→ 播报"没听清…"     → (None, None)
+  │     ├─ 非法或格号不可达 ────→ 播报"没听清…"     → (None, None)
   │     └─ action = null ───────→ 播报"好的"        → (None, None)
   │
-  └─ 返回 ("4", "arrive")
+  └─ 返回 ("3", "arrive")
 ```
 
 ## 五、三个子模块
@@ -86,29 +108,35 @@ listen()
 - 用 `arecord` 子进程直接采集，**不使用 PyAudio**：这台树莓派上 PortAudio 枚举不到 C270 麦克风，现有 PyAudio 脚本会报 `Invalid input device`
 - 用平均幅值判断人声起止，参数在 `config.py` 中：
   - `ENERGY_THRESHOLD`：人声阈值
+  - `SPEECH_START_CHUNKS`：连续几个响亮 chunk（0.25 s/个）才算开口，默认 2
   - `SILENCE_TIMEOUT`：静音多久算说完
   - `LISTEN_TIMEOUT`：最多等多久开口
+- arecord 每次启动的第一个 chunk 常有爆音（实测均值超过阈值），所以要求连续多个响亮 chunk 才开录，这些 chunk 会一起送进 Vosk，不会丢掉字头
 - Vosk 使用小模型 `vosk-model-small-cn-0.22`（66MB），适合树莓派实时识别
+- 每收录到一段人声都会在终端打印 `识别：<文本>`；只有噪声、没识别出文字时打印 `识别：（有声音，但没识别出文字）`，方便现场核对唤醒词和口令
 
 ### 5.2 llm.py —— 大模型解析
 
 调用 DeepSeek 的 OpenAI 兼容接口，提示词要求模型只输出 JSON：
 
 ```json
-{"action": "arrive", "number": "4", "confidence": 0.95}
+{"action": "arrive", "number": "3", "confidence": 0.95}
 ```
 
 约束分三层：
 
-1. **提示词**：固定动作集合、规定字段类型、给出正反例
-2. **接口参数**：`temperature=0`、`max_tokens=64`、`response_format={"type":"json_object"}`
+1. **提示词**：固定动作集合、规定字段类型、给出正反例，并写明本次只接受 0/3/6/7/8 号格
+2. **接口参数**：`temperature=0`、`max_tokens=256`、`response_format={"type":"json_object"}`
 3. **代码校验**：
    - 去掉 Markdown 代码块、提取 JSON 对象
    - `action` 只能是 `"arrive"` 或 `null`
-   - `number` 只能是 `"0"`~`"8"`，中文数字会自动转换
+   - `number` 只能是 `"0"`~`"8"`，中文数字会自动转换；`1/2/4/5` 不在可达集合内，按解析失败处理（`LLMParseError`），上层继续听
+   - “零”被 Vosk 听成“林/林浩/林号”等（如“林浩格”）时，`_repair_zero()` 在送大模型前改回 `0号格`；`CN_NUMBERS` 也兜底接受模型原样抄回的“林/林浩/O”
    - 任一校验失败都返回 `(None, None)`，不执行动作
 
 失败时抛出 `LLMOffline` / `LLMNotConfigured` / `LLMParseError`，由 `__init__.py` 统一转成播报和 `(None, None)`。
+
+`LLM_MAX_TOKENS` 为 256，给 flash 模型留出“先说明再输出 JSON”的余量；如果返回仍被截断，`_parse()` 会从原文里抢救 `action`/`number` 两个白名单字段，抢救不到才报 `LLMParseError`（错误信息附带原文前 120 字）。
 
 ### 5.3 tts.py —— 语音合成与播放
 
@@ -127,13 +155,16 @@ listen()
 
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
-| `LLM_API_KEY` | `""` | 完整口令测试可按部署指南在进程启动后交互输入密钥 |
-| `LLM_BASE_URL` | `https://api.deepseek.com` | 接口地址，换网关时修改 |
-| `LLM_MODEL` | `deepseek-flash` | 模型名 |
+| `LLM_API_KEY` | `os.environ.get("DEEPSEEK_API_KEY", "")` | **不要把密钥写进仓库**；运行时 `export DEEPSEEK_API_KEY=...` |
+| `WAKE_WORDS` | `("小伙小伙", "小伙", "小虎小虎", "小虎")` | 唤醒词；默认收 Vosk 常听成的单“小伙”和“小虎”。可用环境变量 `WAKE_WORDS=词1,词2` 覆盖，不必改代码 |
+| `COMMAND_WINDOW_S` | `7.0` | 唤醒后收集口令的静音窗口（秒） |
+| `LLM_BASE_URL` | `https://api.deepseek.com` | 接口地址；用第三方兼容网关时 `export DEEPSEEK_BASE_URL=...` 覆盖 |
+| `LLM_MODEL` | `deepseek-flash` | 模型名；官方接口用 `deepseek-chat`/`deepseek-reasoner`，可用 `DEEPSEEK_MODEL` 覆盖 |
 | `LLM_TIMEOUT` | `3.0` | 单次请求超时（秒） |
 | `VOSK_MODEL_DIR` | `~/Desktop/mxpidemo/sound/vosk-model-small-cn-0.22` | Vosk 模型路径 |
 | `MIC_DEVICE` | `plughw:CARD=WEBCAM,DEV=0` | C270 麦克风设备 |
-| `ENERGY_THRESHOLD` | `1500` | 人声检测阈值 |
+| `ENERGY_THRESHOLD` | `1500` | 人声检测阈值（实测环境噪声约 650） |
+| `SPEECH_START_CHUNKS` | `2` | 连续几个响亮 chunk 才算开口，用于剔除 arecord 启动爆音 |
 | `SILENCE_TIMEOUT` | `1.0` | 静音断句时间（秒） |
 | `LISTEN_TIMEOUT` | `8.0` | 等待开口时间（秒） |
 | `TTS_VOICE` | `zh-CN-XiaoxiaoNeural` | edge-tts 音色 |
@@ -147,8 +178,14 @@ listen()
 
 ```bash
 cd ~/Smart-Robotic-Arm/src
-source ~/.venvs/smart-robotic-arm/bin/activate
+source ~/Smart-Robotic-Arm/.venv/bin/activate
 python -m pip install -r listen_speak/requirements.txt
+```
+
+大模型密钥只放环境变量，仓库里的 `config.py` 保持为空：
+
+```bash
+export DEEPSEEK_API_KEY=sk-...
 ```
 
 系统依赖（已安装）：`espeak-ng`、`ffmpeg`、`pipewire`（提供 `pw-play`）。
@@ -179,11 +216,15 @@ python -m listen_speak.tts
 # 3. 只测语音识别（对麦克风说一句话）
 python -m listen_speak.asr
 
-# 4. 只测大模型解析（需要先填 API Key）
-python -m listen_speak.llm "请到九宫格的4号位置"
+# 4. 只测大模型解析（先 export DEEPSEEK_API_KEY；“4号”会按不可达报错，换 3 号）
+python -m listen_speak.llm "请到九宫格的3号位置"
+python -m listen_speak.llm "去林浩格"      # 验证“零”的同音字修正
 
-# 5. 完整链路，密钥仅用于本次进程
-python -c 'from getpass import getpass; from listen_speak import config, listen; config.LLM_API_KEY = getpass("API Key "); print(listen())'
+# 5. 完整链路（先 export DEEPSEEK_API_KEY）
+python -m listen_speak
+
+# 6. 只测唤醒 + 窗口收集，不驱动车
+python -c 'from listen_speak import wait_for_wake, collect; print(wait_for_wake()); print(collect())'
 ```
 
 ## 九、离线与异常行为
@@ -204,3 +245,5 @@ python -c 'from getpass import getpass; from listen_speak import config, listen;
 3. **播报是同步的**：`say_event()` 会等语音播完才返回；如果执行模块需要并行，可以后续加线程
 4. **音箱**：默认输出是 3.5mm 耳机孔，需要确认现场插了音箱
 5. **模型名**：`deepseek-flash` 和 `LLM_BASE_URL` 需要按实际接入平台确认
+6. **唤醒词是整词匹配**：Vosk 小模型常把“小伙小伙”识别成别的同音词；现场多试几次，把实际识别到的写法补进 `WAKE_WORDS` 即可
+7. **总控唤醒一次后会持续重听口令**：口令为空或解析不出格号都只播报“没有听到指令”，不要求重新说唤醒词；要退出监听用 `Ctrl-C`。环境嘈杂时注意周围人声，避免被解析成格号

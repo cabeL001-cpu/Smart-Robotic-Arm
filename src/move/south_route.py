@@ -30,6 +30,42 @@ def _ms(distance_m, speed_mps):
     return round(distance_m / speed_mps * 1000)
 
 
+def _log(message):
+    print(message, flush=True)
+
+
+def drive_to_board(*, imu, link, east_ms=EAST_MS, north_ms=NORTH_MS, turn_deg=TURN_DEG,
+                   chunk_ms=400, start_skip_ms=1600, deadband_deg=1., ms_per_deg=45.,
+                   yaw_scale=1., turn_deadband_deg=1., log=_log, on_phase=None):
+    """在已打开的 IMU 与 Uno 连接上跑完整条南侧路线，返回最终航向偏差（度）。
+
+    供总控直接调用：串口和 IMU 由调用方打开，路线本身只负责运动。
+    on_phase 是可选回调，在每段结束、车已停稳后以阶段名（"before_turn" /
+    "after_turn" / "end_north"）调用一次，用于顺带记录；它只读传感器、不发运动，
+    默认 None 表示不记录，不影响原有运动流程。
+    """
+    log("== 东行 ==")
+    go_straight(east_ms, imu=imu, link=link, chunk_ms=chunk_ms,
+                target_deg=0., skip_correction_ms=start_skip_ms,
+                deadband_deg=deadband_deg, ms_per_deg=ms_per_deg,
+                yaw_scale=yaw_scale)
+    if on_phase:
+        on_phase("before_turn")
+    log("== 原地左转 ==")
+    turn_to(turn_deg, imu=imu, link=link, deadband_deg=turn_deadband_deg,
+            fine_ms_per_deg=ms_per_deg, yaw_scale=yaw_scale)
+    if on_phase:
+        on_phase("after_turn")
+    log("== 北行 ==")
+    error = go_straight(north_ms, imu=imu, link=link, chunk_ms=chunk_ms,
+                        target_deg=turn_deg, deadband_deg=deadband_deg,
+                        ms_per_deg=ms_per_deg, yaw_scale=yaw_scale)
+    if on_phase:
+        on_phase("end_north")
+    log(f"南侧路线完成，最终航向偏差 {error:+.1f}°。")
+    return error
+
+
 def main():
     parser = argparse.ArgumentParser(description="南侧路线验收：东行、左转、北行")
     parser.add_argument("--speed", type=float,
@@ -86,23 +122,12 @@ def main():
     try:
         with open_imu(args.imu_port, args.calibration_s, 0.) as imu, \
                 ReconnectLink(args.port) as link:
-            print("== 东行 ==", flush=True)
-            go_straight(east_ms, imu=imu, link=link, chunk_ms=args.chunk_ms,
-                        target_deg=0., skip_correction_ms=args.start_skip_ms,
-                        deadband_deg=args.deadband_deg,
-                        ms_per_deg=args.ms_per_deg,
-                        yaw_scale=args.yaw_scale)
-            print("== 原地左转 ==", flush=True)
-            turn_to(args.turn_deg, imu=imu, link=link,
-                    deadband_deg=args.turn_deadband_deg,
-                    fine_ms_per_deg=args.ms_per_deg,
-                    yaw_scale=args.yaw_scale)
-            print("== 北行 ==", flush=True)
-            error = go_straight(north_ms, imu=imu, link=link, chunk_ms=args.chunk_ms,
-                                target_deg=args.turn_deg, deadband_deg=args.deadband_deg,
-                                ms_per_deg=args.ms_per_deg,
-                                yaw_scale=args.yaw_scale)
-            print(f"南侧路线完成，最终航向偏差 {error:+.1f}°。", flush=True)
+            drive_to_board(imu=imu, link=link, east_ms=east_ms, north_ms=north_ms,
+                           turn_deg=args.turn_deg, chunk_ms=args.chunk_ms,
+                           start_skip_ms=args.start_skip_ms,
+                           deadband_deg=args.deadband_deg,
+                           ms_per_deg=args.ms_per_deg, yaw_scale=args.yaw_scale,
+                           turn_deadband_deg=args.turn_deadband_deg)
     except MotionBlocked as error:
         raise SystemExit(f"底盘因避障保持停车：{error}\n")
     except ValueError as error:

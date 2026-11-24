@@ -93,7 +93,7 @@ python -m move go --ms 250 --dry-run
 先完成 [HC-05 配对](docs/BLUETOOTH_WORKFLOW.md)，再绑定串口。以下命令都在 `src/` 下运行：
 
 ```bash
-sh bt_link.sh bind
+sh bt_link.sh bind sjtu013
 python -m move stop
 python -m move.sonar scan
 ```
@@ -121,18 +121,21 @@ python -m move.sonar scan
 | [机械臂使用示例](docs/arm/USAGE.md) | 常用命令与调用示例 |
 | [机械臂标定与到位](docs/arm/CALIBRATION.md) | 两轴限位、顶摄指尖标定和九宫格到位 |
 | [语音接口与自测](docs/listen_speak/README.md) | 语音识别、意图解析、播报与自测 |
+| [总控流程与现场操作](docs/TASK.md) | `task.py` 总控：唤醒、口令解析、南侧路线、闭环入格与验收清单 |
 
 ## 代码索引
 
 | 路径 | 职责 |
 | --- | --- |
 | [`src/MHS.py`](src/MHS.py) | 任务级入口：`listen`、`say`、`move`、`arm`、`open_uno`、`open_navigation`、`dispatch` |
+| [`src/task.py`](src/task.py) | 总控入口：唤醒 → 口令解析 → 南侧路线 → 闭环入格，全程语音播报 |
 | [`src/uno.py`](src/uno.py) | HC-05/Uno 串口、回执超时与断线重连 |
 | [`src/move/__main__.py`](src/move/__main__.py) | 四轮动作命令，如 `python -m move go/stop/m1…` |
 | [`src/move/navigation.py`](src/move/navigation.py) | 启动零点导航：IMU 粗定位、前摄整圈扫描、停车后视觉微调 |
 | [`src/move/imu/`](src/move/imu/) · [`heading.py`](src/move/heading.py) | IMU 采样/回放、航向保持直行与原地转向 |
 | [`src/move/move.ino`](src/move/move.ino) · [`move_func.ino`](src/move/move_func.ino) · [`arm_control.ino`](src/move/arm_control.ino) | Uno 固件：四轮、两轴舵机、四向超声与受阻锁停 |
 | [`src/move/board_route.py`](src/move/board_route.py) · [`tag_route.py`](src/move/tag_route.py) · [`south_route.py`](src/move/south_route.py) | 九宫格周围路径、墙标闭环路线和南侧验收脚本 |
+| [`src/move/tag_route_pose_record.py`](src/move/tag_route_pose_record.py) | 前摄墙标闭环测距与位姿记录（南侧路线三阶段旁路记录） |
 | [`src/vision/`](src/vision/) | 取流、标签/印刷角标检测、单应与平面；顶摄测末端和车心，臂/车闭环入格，前摄 PnP 测车心 |
 | [`src/arm/`](src/arm/) | 两轴逆解、关节限位、独立点动与格心规划 CLI |
 | [`src/listen_speak/`](src/listen_speak/) | Vosk 识别、口令解析、Piper/Edge TTS 播报 |

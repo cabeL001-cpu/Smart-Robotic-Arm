@@ -4,8 +4,6 @@
   "wall_family": "36h11",
   "wall_tags": [
     {"id": 1, "center_mm": [1000, 2000, null], "right_yaw_deg": 0,   "side_mm": 200},
-    {"id": 2, "center_mm": [1000, 0, null],    "right_yaw_deg": 180, "side_mm": 200},
-    {"id": 3, "center_mm": [0, 1000, null],    "right_yaw_deg": 90,  "side_mm": 200},
-    {"id": 4, "center_mm": [2000, 1000, null], "right_yaw_deg": -90, "side_mm": 200}
+    {"id": 3, "center_mm": [2000, 1000, null], "right_yaw_deg": -90, "side_mm": 200}
   ]
 }

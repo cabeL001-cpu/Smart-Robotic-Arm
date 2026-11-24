@@ -5,7 +5,7 @@
 链路全貌：
 
 ```text
-树莓派板载蓝牙 ──SPP──> HC-05（从模式，sjtu006，PIN 1234） ──D0/D1──> Uno 固件
+树莓派板载蓝牙 ──SPP──> HC-05（从模式，sjtu013，PIN 1234） ──D0/D1──> Uno 固件
                            扩展板 5V GND RX TX 座
 ```
 
@@ -17,7 +17,7 @@
 
 | 编号 | 组别 | 通过标准 |
 | --- | --- | --- |
-| A | 模块预检 | 名称为 `sjtu006`、角色为从模式、UART 为 9600 |
+| A | 模块预检 | 名称为 `sjtu013`、角色为从模式、UART 为 9600 |
 | B | 配对与绑定 | `Paired: yes`、`Trusted: yes`，`/dev/rfcomm0` 存在 |
 | C | 链路往返 | 10 次 `STOP` 全部收到 `OK STOP` |
 | D | 烧录 | 拔模块烧录成功，插回后重新绑定成功 |
@@ -31,7 +31,7 @@
 - 树莓派已按[部署指南第 2 节](DEPLOY_RASPBERRY_PI.md)装好系统、虚拟环境和 `bluez`，当前用户在 `dialout` 组（改组后需重新登录）。
 - Uno 已插好扩展板，**HC-05 暂不插上**，先完成一次固件烧录（见第 5 节）。
 - 底盘架空，负载电源可随时断开。
-- 知道本机模块编号：本批次为 `sjtu001`–`sjtu015`，本次使用 `sjtu006`。
+- 知道本机模块编号：本批次为 `sjtu001`–`sjtu015`，本次使用 `sjtu013`。
 
 以下命令均在树莓派的 `src` 目录、已激活的虚拟环境中执行。实机配置沿用部署指南，先在当前终端设置 `CFG="$HOME/.config/smart-robotic-arm"`。首次配对可直接从第 3 节开始；已有绑定时从停车握手开始。
 
@@ -45,7 +45,7 @@ SSCOM 是大虾丁丁出品的免费 Windows 串口调试助手，课程包里�
 
 ~~~text
 AT            -> OK
-AT+NAME?      -> +NAME:sjtu006      OK
+AT+NAME?      -> +NAME:sjtu013      OK
 AT+ROLE?      -> +ROLE:0            OK    # 0 = 从模式
 AT+UART?      -> +UART:9600,0,0     OK    # 透传波特率必须是 9600
 ~~~
@@ -53,7 +53,7 @@ AT+UART?      -> +UART:9600,0,0     OK    # 透传波特率必须是 9600
 任一项不符时按下列命令改正，再 `AT+RESET`，然后把模块插回扩展板：
 
 ~~~text
-AT+NAME=sjtu006
+AT+NAME=sjtu013
 AT+ROLE=0
 AT+UART=9600,0,0
 AT+RESET
@@ -82,9 +82,9 @@ default-agent
 scan on
 ~~~
 
-等待出现类似 `[NEW] Device AA:BB:CC:DD:EE:FF sjtu006` 的行，记下 MAC，然后：
+等待出现类似 `[NEW] Device AA:BB:CC:DD:EE:FF sjtu013` 的行，记下 MAC，然后：
 
-> 本车实测：`sjtu006` = `00:21:04:32:B4:02`（2026-11-20 扫描得到）。换模块时以 `bluetoothctl devices` 为准，下文的 `AA:BB:CC:DD:EE:FF` 换成实际地址。
+> 本车实测：在用模块 `sjtu013` = `00:21:09:00:12:EC`。`sjtu006` = `00:21:04:32:B4:02` 的 TXD 方向损坏（只能收、不能发），绑定它会出现「Uno 未确认停车」，不要使用。换模块时以 `bluetoothctl devices` 为准，下文的 `AA:BB:CC:DD:EE:FF` 换成实际地址。
 
 ~~~text
 pair AA:BB:CC:DD:EE:FF      # 提示输入 PIN 时填 1234
@@ -102,7 +102,7 @@ bluetoothctl info AA:BB:CC:DD:EE:FF
 ### 3.3 绑定成串口
 
 ~~~bash
-sh bt_link.sh bind sjtu006
+sh bt_link.sh bind sjtu013
 ls -l /dev/rfcomm0
 rfcomm show rfcomm0
 ~~~
@@ -134,7 +134,7 @@ python -m move stop                              # 必须看到「Uno 已确认�
 
 | 命令 | 作用 | 什么时候用 |
 | --- | --- | --- |
-| `sh bt_link.sh bind [MAC或名称]` | 登记 `/dev/rfcomm0`，不连接；省略时按默认名称 `sjtu006` 查 MAC | 树莓派重启后、节点消失、连接失败后 |
+| `sh bt_link.sh bind [MAC或名称]` | 登记 `/dev/rfcomm0`，不连接；省略时按默认名称 `sjtu013` 查 MAC | 树莓派重启后、节点消失、连接失败后 |
 | `sh bt_link.sh release` | 删除登记，清掉半断开状态 | 重绑前，或要换模块时 |
 | `sh bt_link.sh status` | 查看绑定和节点属主 | 排查时 |
 | `python -m move stop` | 打开端口 → 连接 → 发 `STOP` → 等回执 → 关闭 | 每次使用前的连通性检查 |
@@ -272,7 +272,7 @@ python -m move.imu --port "$IMU_PORT"
 
 ~~~bash
 sh bt_link.sh release
-sh bt_link.sh bind sjtu006
+sh bt_link.sh bind sjtu013
 python -m move stop
 ~~~
 
@@ -284,9 +284,10 @@ python -m move stop
 
 | 现象 | 先查 | 处理 |
 | --- | --- | --- |
-| `scan on` 看不到 `sjtu006` | 模块是否上电、是否已被别的设备连接 | 断开其他设备，靠近后重扫；必要时进入 AT 模式核对名字 |
+| `scan on` 看不到 `sjtu013` | 模块是否上电、是否已被别的设备连接 | 断开其他设备，靠近后重扫；必要时进入 AT 模式核对名字 |
 | `pair` 失败或没有 PIN 提示 | `agent on` 是否执行、PIN 是否 1234 | `remove` 后重新 `scan on` → `pair` |
-| `/dev/rfcomm0` 不存在 | 是否配对成功、是否重启过 | `sh bt_link.sh bind`；仍失败先 `bluetoothctl info` 确认 `Paired: yes` |
+| `/dev/rfcomm0` 不存在 | 是否配对成功、是否重启过 | `sh bt_link.sh bind sjtu013`；仍失败先 `bluetoothctl info` 确认 `Paired: yes` |
+| `Uno 未确认停车`，`rfcomm` 显示绑定 `00:21:04:32:B4:02` | 绑到了 sjtu006（TXD 方向坏） | `sh bt_link.sh bind sjtu013`，再用 `python -m move stop` 验证 |
 | 打开串口卡住或报错 | 模块是否在线、是否有进程占用 | 关闭 minicom/串口监视器；模块断电时打开可能等半分钟才报错 |
 | 权限不足 | 是否在 `dialout` 组、节点属主 | `sudo chown $USER /dev/rfcomm0`，或重新登录使组生效 |
 | 收到乱码或 `ERR LINE` | 波特率是否 9600 | 回第 2 节用 `AT+UART?` 核对 |

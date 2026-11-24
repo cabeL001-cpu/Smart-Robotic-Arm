@@ -10,7 +10,7 @@
 
 | 从哪里接 | 接到哪里 | 接线依据 |
 | --- | --- | --- |
-| 树莓派板载蓝牙 | 扩展板蓝牙座上的 HC-05 | 无线传底盘和机械臂命令，不占 USB。模块已配置为从模式，名称 `sjtu006`（本批次 `sjtu001`–`sjtu015`），密码 `1234`；树莓派侧绑定为 `/dev/rfcomm0`，固件仍使用 `9600` 波特、8N1、换行结尾的 ASCII 指令 |
+| 树莓派板载蓝牙 | 扩展板蓝牙座上的 HC-05 | 无线传底盘和机械臂命令，不占 USB。模块已配置为从模式，名称 `sjtu013`（本批次 `sjtu001`–`sjtu015`），密码 `1234`；树莓派侧绑定为 `/dev/rfcomm0`，固件仍使用 `9600` 波特、8N1、换行结尾的 ASCII 指令 |
 | Uno 主控 `G、V、A4、A5` | 五口 IIC 扩展板的 `GND、VCC、SDA、SCL` | 一个端子接主控，另四个端子各接一组 SR09。按 GND 丝印和端子方向核对线序 |
 | 前、后、左、右 SR09 | IIC 扩展板任意四个空口 | 以车体为准，前 `0x6C`、后 `0x72`、左 `0x6F`、右 `0x6A`。插口并联，不需改址 |
 | 树莓派另一 USB 口 | YbImu 的 USB 数据口 | 独立串口，`115200` 波特、8N1。将 IMU 刚性固定在底盘，记录其 +X 相对车头的方向 |
@@ -116,7 +116,7 @@ rfkill unblock bluetooth 2>/dev/null || true
 bluetoothctl
 ~~~
 
-在 `bluetoothctl` 的交互提示符中依次执行。`scan on` 后等待 `sjtu006` 出现在列表里，记下它前面的 MAC 地址（本批次的名称是 `sjtu001` 到 `sjtu015`，以模块上的编号为准）。
+在 `bluetoothctl` 的交互提示符中依次执行。`scan on` 后等待 `sjtu013` 出现在列表里，记下它前面的 MAC 地址（本批次的名称是 `sjtu001` 到 `sjtu015`，以模块上的编号为准）。
 
 ~~~text
 power on
@@ -132,7 +132,7 @@ exit
 
 ~~~bash
 cd "$HOME/Smart-Robotic-Arm/src"
-sh bt_link.sh bind sjtu006         # 等价于 sudo rfcomm bind rfcomm0 <MAC> 1
+sh bt_link.sh bind sjtu013         # 等价于 sudo rfcomm bind rfcomm0 <MAC> 1
 ls -l /dev/rfcomm0
 
 sh bt_link.sh status               # 查看绑定
@@ -141,7 +141,7 @@ sh bt_link.sh release              # 需要断开时释放
 
 日常使用时不需要手动连接：`move`、`arm`、`vision` 每次运行都会在打开端口时自动建立蓝牙连接，程序退出后链路自动断开，模块指示灯回到快闪。**空闲时快闪是正常状态**，不要用灯色判断链路好坏，以 `python -m move stop` 是否打印「Uno 已确认停车。」为准。
 
-树莓派每次重启或 HC-05 断电重连后，`/dev/rfcomm0` 都会消失，需要重新 bind。要开机自动绑定，可新建 `/etc/systemd/system/rfcomm.service`，把 MAC 换成实际地址（本车 `sjtu006` = `00:21:04:32:B4:02`），然后启用它。
+树莓派每次重启或 HC-05 断电重连后，`/dev/rfcomm0` 都会消失，需要重新 bind。要开机自动绑定，可新建 `/etc/systemd/system/rfcomm.service`，把 MAC 换成实际地址（本车 `sjtu013` = `00:21:09:00:12:EC`），然后启用它。
 
 ~~~ini
 [Unit]
@@ -152,7 +152,7 @@ Requires=bluetooth.service
 [Service]
 Type=oneshot
 ExecStart=-/usr/bin/rfcomm release rfcomm0
-ExecStart=/usr/bin/rfcomm bind rfcomm0 00:21:04:32:B4:02 1
+ExecStart=/usr/bin/rfcomm bind rfcomm0 00:21:09:00:12:EC 1
 RemainAfterExit=yes
 
 [Install]
@@ -436,7 +436,7 @@ test -d "$HOME/Desktop/mxpidemo/sound/vosk-model-small-cn-0.22/am"
 python -c 'from listen_speak import recognize; print(recognize())'
 ~~~
 
-对着麦克风说“请到九宫格四号位置”，终端应显示识别到的中文。空字符串表示这次没有得到有效语音。此步骤可断网执行。
+对着麦克风说“请到九宫格三号位置”，终端应显示识别到的中文。空字符串表示这次没有得到有效语音。此步骤可断网执行。
 
 ### 8.2 离线播报与在线口令解析
 
@@ -461,7 +461,7 @@ config.LLM_API_KEY = getpass("API Key ")
 print(listen())'
 ~~~
 
-说“请到九宫格四号位置”，期望返回 `('4', 'arrive')`，空指令等情况返回 `(None, None)`。当前语音分类支持格号 0–8。A/B/C/D 可从命令行指定，或由调用方将 `('A','arrive')` 和导航会话传给 `MHS.dispatch`。[语音接口](../src/listen_speak/__init__.py) · [系统接口手册](API.md)
+说“请到九宫格三号位置”，期望返回 `('3', 'arrive')`，空指令等情况返回 `(None, None)`。当前语音分类只接受 0/3/6/7/8 号格，说 1/2/4/5 会返回 `(None, None)` 让用户重说。A/B/C/D 可从命令行指定，或由调用方将 `('A','arrive')` 和导航会话传给 `MHS.dispatch`。[语音接口](../src/listen_speak/__init__.py) · [系统接口手册](API.md)
 
 ## 9. 下次开机与故障定位
 
@@ -483,7 +483,7 @@ python -m move stop --port "$UNO_PORT"
 | --- | --- |
 | `No module named move`、`serial` 或缺少 `ArucoDetector` | `pwd` 应为项目的 `src`，`which python` 应在虚拟环境内。运行第 2 节的安装与导入检查。用 `python -m pip list` 检查 OpenCV。同一环境只留一种提供 `cv2` 的发行包 |
 | `/dev/rfcomm0` 不存在 | 树莓派重启或 HC-05 掉电重连后绑定会失效。在 `src` 运行 `sh bt_link.sh bind` 重新绑定。蓝牙服务没起来时先 `sudo systemctl enable --now bluetooth`，用 `rfkill list` 确认没被软关闭 |
-| 扫描不到 `sjtu006`、配对失败 | 确认模块在可配对状态（指示灯快闪），没有别的设备已经连着它，树莓派与模块距离足够近。密码为 `1234`。用 `bluetoothctl devices` 核对名字和 MAC |
+| 扫描不到 `sjtu013`、配对失败 | 确认模块在可配对状态（指示灯快闪），没有别的设备已经连着它，树莓派与模块距离足够近。密码为 `1234`。用 `bluetoothctl devices` 核对名字和 MAC |
 | Uno 或 IMU 报权限不足、串口正忙 | 用 `id -nG`、`ls -lL "$UNO_PORT" "$IMU_PORT"` 检查 `dialout` 权限，重新登录使组生效。`/dev/rfcomm0` 由 root 创建，必要时 `sudo chown $USER /dev/rfcomm0`。同一时刻只让一个进程占用串口，关闭 IDE 监视器、minicom 或此前仍在运行的进程。HC-05 断电时打开节点可能先卡住约半分钟再报错，属于内核在等 RFCOMM 连接 |
 | 蓝牙链路时断时续、Uno 不确认停车 | 查模块供电（扩展板 5V 座）、距离和 2.4 GHz 干扰，重新 `sh bt_link.sh bind`。Uno 按本机时钟计时，链路中断时当前动作仍会到期自动停车，不会一直转 |
 | `Uno 未确认停车`，或 USB 上传失败、找不到板 | 运行时查蓝牙端点、Uno 独立供电和 9600 波特协议；打开蓝牙链路后开头几个字节可能丢失，重试即可。上传时另查 `FLASH_PORT`、数据线、`arduino:avr:uno` 板型和串口占用，烧录前确认 HC-05 已从蓝牙座拔下，避免把 `UNO_PORT` 当作 USB 烧录口。若有 `OK STOP` 但轮子不动，查底盘电源和对应 M 插座 |

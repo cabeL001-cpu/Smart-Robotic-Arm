@@ -76,7 +76,7 @@ python -m move.navigation --reset-lock --uno-port "$UNO_PORT"
 | `m1`、`m2`、`m3`、`m4` | 对应扩展板电机座单轮正转 |
 | `stop` | 四轮停车。保持舵机已有输出，保留导航锁存 |
 
-从 `src` 运行 `python -m move [ACTION] [--ms 毫秒] [--port 端口] [--dry-run] [--avoid on|off]`。`--dry-run` 只打印指令；只给 `--avoid` 时可切换固件避障开关。`python -m move.go_one_second` 实际请求前进 1000 ms。`python -m move.sonar scan` 扫描，`python -m move.sonar read [--watch] [--port 端口]` 读取；`--watch` 每 0.25 秒打印一次。`sh bt_link.sh bind [MAC或模块名]` 建立蓝牙串口节点，`status` 查状态，`release` 释放绑定。可设 `BT_NAME`、`BT_DEV`、`BT_CHANNEL`，默认分别为 `sjtu006`、`rfcomm0`、`1`。[底盘协议和接线](move/README.md) · [蓝牙配置](BLUETOOTH_WORKFLOW.md)
+从 `src` 运行 `python -m move [ACTION] [--ms 毫秒] [--port 端口] [--dry-run] [--avoid on|off]`。`--dry-run` 只打印指令；只给 `--avoid` 时可切换固件避障开关。`python -m move.go_one_second` 实际请求前进 1000 ms。`python -m move.sonar scan` 扫描，`python -m move.sonar read [--watch] [--port 端口]` 读取；`--watch` 每 0.25 秒打印一次。`sh bt_link.sh bind [MAC或模块名]` 建立蓝牙串口节点，`status` 查状态，`release` 释放绑定。可设 `BT_NAME`、`BT_DEV`、`BT_CHANNEL`，默认分别为 `sjtu013`、`rfcomm0`、`1`。[底盘协议和接线](move/README.md) · [蓝牙配置](BLUETOOTH_WORKFLOW.md)
 
 ### Uno 线上协议
 
@@ -174,9 +174,39 @@ if command[0] is not None:
 
 | 接口 | 参数、结果及副作用 |
 | --- | --- |
-| `MHS.listen(timeout=None)`、`listen_speak.listen(timeout=None)` | `timeout` 是等待开始说话的秒数，缺省取配置。检查模型配置和网络后录音、本地转写、在线分类。正常返回 `("0"…"8","arrive")`，空指令或不可用时返回 `(None,None)` 并按情况播报。当前语音分类只产生数字格号。字母停靠指令可从调用方直接交给 `MHS.dispatch`。 |
+| `MHS.listen(timeout=None)`、`listen_speak.listen(timeout=None)` | `timeout` 是等待开始说话的秒数，缺省取配置。检查模型配置和网络后录音、本地转写、在线分类。正常返回 `("0"/"3"/"6"/"7"/"8","arrive")`，空指令或不可用时返回 `(None,None)` 并按情况播报。语音分类只接受这五个可达格号，说 1/2/4/5 按识别失败处理；“零”被听成“林/林浩”时会在送大模型前自动修正。字母停靠指令可从调用方直接交给 `MHS.dispatch`。 |
 | `listen_speak.asr.listen(timeout=None)` | 只录音与离线识别，返回无空格文本或空字符串。`listen_speak.llm.classify(text)` 单独解析文字，失败可抛 `LLMNotConfigured`、`LLMOffline` 或 `LLMParseError`。`llm.is_online()` 检查服务可达性。 |
 | `MHS.say(text,offline=False)`、`listen_speak.speak(text,offline=False)` | 同步播放文本，优先使用缓存；在线可用 edge-tts，离线尝试 Piper，再回退 espeak-ng。成功返回 `True`，底层播放失败可抛异常。 |
-| `listen_speak.say_event(event,offline=False,**params)` | 模板名 `start/arrive` 传 `number`，`fail` 传 `reason`，`complete/empty/offline` 无需参数。对有效模板，播放成功返回 `True`，失败返回 `False`。`listen_speak.tts.prewarm()` 预生成固定提示音。 |
+| `listen_speak.say_event(event,offline=False,**params)` | 模板名 `start/arrive` 传 `number`，`fail` 传 `reason`，`complete/empty/offline` 无需参数；总控用的 `wake/moving/arrived/cell/no_command` 见下节。对有效模板，播放成功返回 `True`，失败返回 `False`。`listen_speak.tts.prewarm()` 预生成固定提示音。 |
+| `listen_speak.wait_for_wake(timeout=None)` | 反复录音直到文本包含 `config.WAKE_WORDS`（默认“小伙小伙”），听到返回 `True`。`timeout` 是每轮等待开口的秒数。 |
+| `listen_speak.collect(timeout=None)` | 唤醒后收集口令。反复调用 `asr.listen(timeout)`：某轮 `timeout` 秒内没人声就结束并返回已收集文本；听到一句后重新给满 `timeout` 秒。`timeout` 缺省为 `config.COMMAND_WINDOW_S`（7 s）。 |
+| `listen_speak.understand(text)` | 只做 `classify(text)` 并把 `LLMError`（未配置/离线/格式错/接口报错）折叠成 `(None,None)`，不录音、不播报；失败原因会打印为 `大模型未处理口令：<原因>`。空文本直接返回 `(None,None)`。 |
 
 独立入口有 `python -m listen_speak.asr`、`python -m listen_speak.llm "口令"`、`python -m listen_speak.tts [--prewarm]`。需要完整识别时在已配置进程调用 `listen()`。音频设备、Vosk/Piper 模型与密钥的配置见[语音模块](listen_speak/README.md)。
+
+## 7. 总控
+
+`python -m task` 从 `src/` 运行，串起唤醒、口令解析、南侧路线与闭环入格。启动后只开语音识别；听到唤醒词之前不做 Apriltag 检测，也不驱动车和臂。避障在入口处 `AVOID OFF`，退出时恢复 `AVOID ON`（重新上电本来也会恢复）。
+
+| 参数 | 缺省与含义 |
+| --- | --- |
+| `--dry-run` | 只打印唤醒词、窗口、路线时长、相机与密钥状态，不碰硬件。 |
+| `--wake-timeout S` | 每轮等用户开口的秒数，缺省 `LISTEN_TIMEOUT`（8 s）。 |
+| `--window-s S` | 唤醒后每轮最多等多久开口，缺省 7 s；一识别出文字就立即交大模型。 |
+| `--echo-guard-s S` | 播报问候后先等多久再开录音，缺省 0.6 s。 |
+| `--east-ms / --north-ms / --turn-deg` | 南侧路线参数，缺省 4760 / 2830 / 85.5，同 `move.south_route`。 |
+| `--imu-port`、`--calibration-s`、`--port` | 缺省 `/dev/ttyUSB0`、2 s、`UNO_PORT` 或 `/dev/rfcomm0`。 |
+| `--method` | `auto`（缺省）/ `arm` / `drive`，转发给 `vision.place`。 |
+| `--top-source` | 顶摄编号或端点，缺省读环境变量 `TOP_CAM`，否则 `2`。 |
+| `--config`、`--no-raw`、`--targets`、`--arm 肩µs 肘µs`、`--release` | 同 `vision.place`；缺省 YUYV、臂固定脉宽 `360 1570`。 |
+
+流程与退出码：
+
+1. `wait_for_wake()` → 播报“您好，有什么事，很高兴为您服务” → 反复 `asr.listen(7)` 逐句监听。
+2. 识别出文字就立即 `understand()` 解析；没解析出格号时播报“没有听到指令，请再说一遍”，在同一次唤醒里继续听，不要求再说唤醒词；只有噪声、没识别出文字的轮次直接跳过。
+3. 播报“开始移动” → `open_imu` + `move.south_route.drive_to_board()`（停在板子南边）。
+4. 播报“已抵达地点” → `vision.place.place_cells([cell], method=...)`。
+5. 到位播报“已抵达{cell}号位”并退出（返回 0）；未到位播报“任务结束”并返回 1。
+6. `Ctrl-C` 返回 130；链路/IMU/相机异常返回 1。未设置 `DEEPSEEK_API_KEY` 时在碰硬件前返回 2。
+
+现场摆放、常见故障与验收清单见 [总控流程](TASK.md)。

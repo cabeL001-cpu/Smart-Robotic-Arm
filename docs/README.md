@@ -7,7 +7,7 @@
 在已配对的树莓派上激活项目虚拟环境。先将四轮架空，关闭轮臂负载电源，保留主控和探头供电。下列命令只停车和读取传感器。
 
 ```bash
-sh bt_link.sh bind
+sh bt_link.sh bind sjtu013
 python -m move stop
 python -m move.sonar scan
 python -m move.sonar read
@@ -25,6 +25,7 @@ python -m move.sonar read
 | 视觉 | 顶摄 `vision.arm`、`vision.robot`、`vision.align` 分别测末端、测车心和闭环到格；`vision.servo` 以印刷数字质心为格目标做臂雅可比迭代（`--closed` 为不依赖预置位的全闭环，适合九宫格相对车体位移的情况），末端可解码时用标签四角、否则用黑框四边形中心，`vision.drive` 固定臂走车微调够不到的格，`vision.reposition` 用四个印刷角标把车微调回 11-23 标定 0/3/6/7/8 时的位姿，`vision.place` 按可达性自动分流两种闭环。前摄 `vision.scan front` 读墙标像素，`vision.front` 由地图和内外参输出米制车心 | [相机设置与示例](vision/README.md) · [机械臂标定](arm/CALIBRATION.md) |
 | IMU | `python -m move.imu` 输出平面位置与航向；`--vision-stdin` 可接收同机 `vision.robot` 的位姿修正；`python -m move.heading` 用累计航向分段修正直行偏航 | [采样、记录与回放](move/imu/README.md) |
 | 语音 | `MHS.listen()` 返回格号和动作，`MHS.say(text)` 播报文本，`listen_speak.say_event()` 播报预设事件 | [语音接口与自测](listen_speak/README.md) |
+| 总控 | `python -m task` 串起整条流程：等“小伙小伙”唤醒 → 7 s 窗口收口令 → DeepSeek 解析格号 → `south_route` 到板南 → `vision.place` 闭环入格，每步播报，结束后退出。`--dry-run` 只打印参数 | [总控流程与现场操作](TASK.md) |
 
 ## 共用 Uno 连接
 
@@ -39,4 +40,4 @@ with MHS.open_uno() as link:
     print(read(link)["front"]["mm"])
 ```
 
-`OK ARM` 表示 Uno 已设置两路舵机输出，末端是否到达格心由顶摄测量。语音当前返回 `("4","arrive")` 等格号，`MHS.dispatch` 可将它交给已标定工位的机械臂。调用方也可直接传 `("A","arrive")` 和已打开的 `navigator`，启动字母点导航。若需在导航会话中操作手臂，使用 `nav.shared_link()` 或 `MHS.dispatch` 顺序复用连接。[调用和返回示例](API.md)
+`OK ARM` 表示 Uno 已设置两路舵机输出，末端是否到达格心由顶摄测量。语音当前返回 `("3","arrive")` 等格号（只接受 0/3/6/7/8），`MHS.dispatch` 可将它交给已标定工位的机械臂。调用方也可直接传 `("A","arrive")` 和已打开的 `navigator`，启动字母点导航。若需在导航会话中操作手臂，使用 `nav.shared_link()` 或 `MHS.dispatch` 顺序复用连接。[调用和返回示例](API.md)

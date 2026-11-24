@@ -9,19 +9,19 @@ import subprocess
 import time
 
 import numpy as np
-from vosk import KaldiRecognizer, Model, SetLogLevel
 
 from . import config
-
-SetLogLevel(-1)
 
 _model = None
 
 
 def _get_model():
-    """Vosk 模型加载较慢，全局只加载一次。"""
+    """Vosk 模型加载较慢，全局只加载一次；只在真正录音时才导入 vosk。"""
     global _model
     if _model is None:
+        from vosk import Model, SetLogLevel
+
+        SetLogLevel(-1)
         _model = Model(config.VOSK_MODEL_DIR)
     return _model
 
@@ -34,6 +34,8 @@ def _energy(chunk):
 
 def listen(timeout=None):
     """录一句话并返回识别文本；没有检测到人声时返回空字符串。"""
+    from vosk import KaldiRecognizer
+
     timeout = config.LISTEN_TIMEOUT if timeout is None else timeout
     recognizer = KaldiRecognizer(_get_model(), config.SAMPLE_RATE)
 
@@ -49,7 +51,14 @@ def listen(timeout=None):
     start = time.monotonic()
     speech_start = None
     silence_start = None
+    loud_chunks = []  # 连续响亮但还没凑够开头的 chunk
     text = ""
+
+    def feed(audio):
+        """送一小段音频给 Vosk，凑成整句就把文字追加到 text。"""
+        nonlocal text
+        if recognizer.AcceptWaveform(audio):
+            text += json.loads(recognizer.Result()).get("text", "")
 
     try:
         while True:
@@ -60,18 +69,25 @@ def listen(timeout=None):
             now = time.monotonic()
             loud = _energy(chunk) >= config.ENERGY_THRESHOLD
 
-            # 还没听到人声：超时就退出
             if speech_start is None:
+                # 还没开口：连续多个响亮 chunk 才算人声。
+                # arecord 每次启动的第一个 chunk 常有爆音（实测均值超过阈值），
+                # 只凭一个 chunk 会把它当人声，录一段空音频后报“有声音但没识别出文字”。
                 if loud:
+                    loud_chunks.append(chunk)
+                    if len(loud_chunks) < config.SPEECH_START_CHUNKS:
+                        continue
                     speech_start = now
-                elif now - start >= timeout:
-                    break
+                    for pending in loud_chunks:
+                        feed(pending)
+                    loud_chunks = []
                 else:
+                    loud_chunks = []
+                    if now - start >= timeout:
+                        break
                     continue
-
-            # 识别当前这一小段
-            if recognizer.AcceptWaveform(chunk):
-                text += json.loads(recognizer.Result()).get("text", "")
+            else:
+                feed(chunk)
 
             # 连续静音足够久：认为说完了
             if loud:
@@ -86,14 +102,20 @@ def listen(timeout=None):
             if now - speech_start >= config.MAX_RECORD_SECONDS:
                 break
     finally:
-        proc.terminate()
-        proc.wait(timeout=2)
+        # arecord 卡在 ALSA 上时 SIGTERM 可能不生效（管道写满后一直不返回），
+        # 录音子进程没有需要收尾的数据，直接 SIGKILL 收掉。
+        proc.kill()
+        proc.wait()
+        proc.stdout.close()
 
     if speech_start is None:
         return ""
 
     text += json.loads(recognizer.FinalResult()).get("text", "")
-    return "".join(text.split())
+    text = "".join(text.split())
+    # 每收录到一段人声就把识别结果打到终端，方便现场核对唤醒词和口令。
+    print(f"识别：{text or '（有声音，但没识别出文字）'}", flush=True)
+    return text
 
 
 if __name__ == "__main__":

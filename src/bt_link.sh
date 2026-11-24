@@ -6,10 +6,10 @@
 #   sh bt_link.sh release
 #   sh bt_link.sh status
 #
-# 可用环境变量覆盖：BT_NAME（默认 sjtu006）、BT_DEV（默认 rfcomm0）、BT_CHANNEL（默认 1）。
+# 可用环境变量覆盖：BT_NAME（默认 sjtu013）、BT_DEV（默认 rfcomm0）、BT_CHANNEL（默认 1）。
 set -eu
 
-NAME=${BT_NAME:-sjtu006}
+NAME=${BT_NAME:-sjtu013}
 DEV=${BT_DEV:-rfcomm0}
 CHANNEL=${BT_CHANNEL:-1}
 PORT=/dev/$DEV

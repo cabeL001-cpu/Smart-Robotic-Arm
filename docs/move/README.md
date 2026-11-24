@@ -123,6 +123,8 @@ python3 -m move.heading --watch                  # 不驱动底盘，只打印�
 
 `python -m move.south_route` 把标定参数串成完整路线，起点车心 `(0.17, 0.17)` m、车头朝 +X，车贴住场地左下角。九宫格 30 cm 见方、中心 `(0.90, 0.90)`，南边在 y=0.75 m。默认值是 2026-11-23 在实车上逐次修正后的结果：东行 73 cm（4760 ms）→ 原地左转 85.5° → 北行 41 cm（2830 ms），车头前沿贴住九宫格南边、不留缝，最终车心 `(0.90, 0.58)` m。交接用法见 [南侧路线交接说明](SOUTH_ROUTE.md)。
 
+总控复用同一段路线：`south_route.drive_to_board(imu=..., link=...)` 在调用方已打开的 IMU 与 Uno 连接上执行，返回最终航向偏差，不再自行开关设备；命令行入口内部也走这个函数。[总控流程](../TASK.md)
+
 ~~~bash
 python3 -m move.south_route --dry-run     # 只打印路线与理论终点
 python3 -m move.south_route               # 实际执行
