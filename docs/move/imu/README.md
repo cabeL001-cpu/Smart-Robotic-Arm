@@ -1,0 +1,40 @@
+# YbImu 九轴平面定位
+
+IMU 用独立的 USB 串口接树莓派，默认协议为 115200、8N1。底盘和机械臂共用的 Uno 由车载电源供电，走 HC-05 蓝牙串口 `/dev/rfcomm0`（9600 波特），不占 USB。运行前用 `python3 -m serial.tools.list_ports -v` 找到 IMU 的 USB 端口即可。下列命令均从 `src` 运行。
+
+## 实时运行与原始数据记录
+
+将车停在已知原点，车头朝场地 +X，开机后保持静止至少两秒。若从其他已知位姿启动，用 `--origin X米 Y米 朝向度` 给出初值。传感器 +X 朝车头时安装偏角为零，其他安装方向用 `--mount-yaw` 指定传感器 +X 相对车头的逆时针角度。
+
+~~~bash
+python3 -m pip install -r move/requirements.txt
+python3 -m move.imu --port /dev/ttyUSB0 --record run-raw.csv
+python3 -m move.imu --replay run-raw.csv
+python3 -m unittest move.imu.test_imu
+~~~
+
+每个新样本输出一行 JSON，包括单调时间戳、场地位置（米）、航向（弧度）、速度（米/秒）和本次是否接受视觉校正。台架验证时可加 `--stationary` 连续施加零速约束。在线程序也可在确认底盘静止时调用 `tracker.update(sample, stationary=True)`。
+
+## 估计原理与视觉校正
+
+解析厂商的 `7E 23` 帧头、总长度、功能字和模 256 累加校验。原始帧 `0x04` 提供三轴加速度与角速度，姿态来自 `0x16` 四元数或 `0x26` 欧拉角。静止段估计传感器坐标中的加速度偏置，AHRS 四元数将比力旋到导航系，随后在场地水平面进行梯形积分。采样缺口大于 0.3 秒时冻结位置并清零速度，等待后续样本和绝对观测。
+
+IMU 给出短时间相对位移，零偏会随积分产生位置漂移。相机看到场地固定标记后，可用同一树莓派上的曝光时间校正历史位姿，再保留曝光后发生的运动。程序接受最近一秒内的有序观测。无标记且搬动期间传感器未记录运动时，绝对位置需等下一次有效视觉观测才能恢复。
+
+~~~bash
+source "$HOME/.config/smart-robotic-arm/devices.env"
+python3 -m vision.robot --source "$CAM" --config "$HOME/.config/smart-robotic-arm/vehicle.json" | python3 -m move.imu --port "$IMU_PORT" --vision-stdin
+python3 -m move.imu --replay run-raw.csv --fixes poses.jsonl
+~~~
+
+实时管道可使用已标定顶摄 `vision.robot` 或前摄 `vision.front` 输出的米制位姿。两端共用同一台树莓派的单调时钟，离线回放使用同次录制、同一时基的位姿 JSON 行。在线程序可用 `Tracker.state_at(t)` 取得对应时刻的惯性状态，调用 `Tracker.correct(t,x_m,y_m,yaw_rad)` 校正，并检查是否被接受。自动导航在独立线程连续采样，停车后施加零速约束，利用未折返的累计航向确认整圈。[导航标定](../CALIBRATION.md) · [位姿观测](../../vision/README.md)
+
+## 航向保持直行
+
+`python -m move.heading` 复用这里的静止标定，但转角来自**陀螺仪积分**（`ImuFeed.snapshot_gyro()`）：机体系角速度减去静止零偏，再沿加速度融合得到的导航竖直轴投影后梯形积分。AHRS 融合的四元数航向不参与控制——实车磁力计受电机、电池和车架干扰，手推 90° 四个方向读数在 59°～142° 之间，静止时还会自己漂。`--watch` 同时打印两列，陀螺列用于核对安装方向和左右符号，AHRS 列用于观察磁干扰的幅度。参数与用法见[底盘说明](../README.md)。
+
+## 资料与可重复验证
+
+串口字段及单位依据提供的 YbImuLib 树莓派驱动。厂商上位机可配置九轴融合及回传频率，并可完成硬件水平校准和磁力计校准。这里每次启动进行软件零偏与航向对齐。
+
+记录文件保存 `time_s,ax_g,ay_g,az_g,gx_rad_s,gy_rad_s,gz_rad_s,qw,qx,qy,qz`。资料目录内的 `imu_trajectory_*.csv` 保存的是已经计算出的轨迹，不能据此重算原始加速度。独立测试覆盖协议拆包、坏校验、两类姿态帧、倾斜静止、加速与匀速、停车、断采和延迟视觉重定位。
